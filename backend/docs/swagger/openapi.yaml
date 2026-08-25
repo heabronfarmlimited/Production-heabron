@@ -1,0 +1,166 @@
+openapi: 3.0.3
+info:
+  title: Heabron CoopScore API
+  description: |
+    REST API for the Heabron CoopScore platform.
+
+    ### Audiences
+    - **Field Agent app** — consumes the `/api/agent/*` endpoints (login, KYC, cooperatives, farmers, deliveries, financing, repayments, wallet).
+    - **Admin web** — consumes the `/api/admin/*` endpoints for governance, approvals, partner management, and credit oversight.
+    - **Partner portal** — consumes the `/api/partner/*` endpoints (lender/investor credit reports, portfolio monitoring, financing decisions).
+
+    ### Authentication
+    All endpoints (except `/api/auth/*` and `/api/health`) require a **Bearer JWT** in the `Authorization` header:
+    ```
+    Authorization: Bearer <accessToken>
+    ```
+    Tokens are obtained via `POST /api/auth/login` and refreshed via `POST /api/auth/refresh`.
+
+    ### Response envelope
+    Every endpoint returns either:
+    ```json
+    { "success": true, "data": <any>, "meta": <pagination>? }
+    ```
+    or:
+    ```json
+    { "success": false, "error": { "code": "...", "message": "...", "details": <any>? } }
+    ```
+
+    ### Error codes
+    | Code | HTTP |
+    |---|---|
+    | `BAD_REQUEST` | 400 |
+    | `UNAUTHORIZED` | 401 |
+    | `FORBIDDEN` | 403 |
+    | `NOT_FOUND` | 404 |
+    | `CONFLICT` | 409 |
+    | `UNPROCESSABLE_ENTITY` | 422 |
+    | `TOO_MANY_REQUESTS` | 429 |
+    | `INTERNAL_ERROR` | 500 |
+  version: 1.0.0
+  contact:
+    name: Heabron Farm Limited
+    email: info@heabron.com
+    url: https://www.heabron.com
+
+servers:
+  - url: http://localhost:4000/api
+    description: Local development
+  - url: https://heabron-coopscore-api.vercel.app/api
+    description: Production (Vercel)
+
+tags:
+  - name: Health
+    description: Service health and metadata
+  - name: Auth
+    description: Sign up, login, password reset
+  - name: Agent — Dashboard
+  - name: Agent — Profile
+  - name: Agent — Cooperatives
+  - name: Agent — Farmers
+  - name: Agent — Production
+  - name: Agent — Deliveries
+  - name: Agent — Financing
+  - name: Agent — Repayments
+  - name: Agent — Wallet
+  - name: Agent — Notifications
+  - name: Agent — Uploads
+  - name: Agent — Imports
+  - name: Admin — Dashboard
+  - name: Admin — Agents
+  - name: Admin — Partners
+  - name: Admin — Cooperatives
+  - name: Admin — Farmers
+  - name: Admin — Financing
+  - name: Admin — Credit
+  - name: Admin — Benchmarks
+  - name: Admin — Wallets
+  - name: Admin — Activity
+  - name: Partner — Dashboard
+  - name: Partner — Search
+  - name: Partner — Credit Reports
+  - name: Partner — Portfolio
+  - name: Partner — Financing
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: 1-indexed page number
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSizeParam:
+      name: pageSize
+      in: query
+      description: Items per page (max 100)
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    SearchParam:
+      name: search
+      in: query
+      description: Substring search
+      schema: { type: string }
+    StatusParam:
+      name: status
+      in: query
+      description: Filter by status
+      schema: { type: string }
+    StateParam:
+      name: state
+      in: query
+      schema: { type: string }
+    LgaParam:
+      name: lga
+      in: query
+      schema: { type: string }
+    CropParam:
+      name: crop
+      in: query
+      schema: { type: string }
+    TierParam:
+      name: tier
+      in: query
+      schema: { type: string, enum: [A, B, C, D] }
+    StartDateParam:
+      name: startDate
+      in: query
+      schema: { type: string, format: date }
+    EndDateParam:
+      name: endDate
+      in: query
+      schema: { type: string, format: date }
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Forbidden:
+      description: Authenticated but lacks required role
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Validation:
+      description: Validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    RateLimited:
+      description: Too many requests
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+paths: {}

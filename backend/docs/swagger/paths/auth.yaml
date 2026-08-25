@@ -1,0 +1,232 @@
+/health:
+  get:
+    tags: [Health]
+    security: []
+    summary: Service health check
+    responses:
+      '200':
+        description: Service is healthy
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+
+/auth/signup:
+  post:
+    tags: [Auth]
+    security: []
+    summary: Step 1 — Sign up with email and password
+    description: |
+      Creates the auth user and sends a 6-digit OTP to the supplied email.
+      The agent must then call `/auth/verify-otp` (step 2) and `/auth/signup/complete` (step 3).
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SignupStep1Request' }
+    responses:
+      '201':
+        description: Account created, OTP sent
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties:
+                        userId: { type: string, format: uuid }
+                        email: { type: string }
+                        nextStep: { type: string, example: verify_otp }
+                        otpSentTo: { type: string }
+      '409': { description: Email already registered, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+      '422': { $ref: '#/components/responses/Validation' }
+      '429': { $ref: '#/components/responses/RateLimited' }
+
+/auth/verify-otp:
+  post:
+    tags: [Auth]
+    security: []
+    summary: Step 2 — Verify the 6-digit OTP sent by email
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/VerifyOtpRequest' }
+    responses:
+      '200':
+        description: OTP verified
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties: { verified: { type: boolean } }
+      '400':
+        description: OTP not found, expired, or already consumed
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+/auth/resend-otp:
+  post:
+    tags: [Auth]
+    security: []
+    summary: Resend the OTP
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ResendOtpRequest' }
+    responses:
+      '200': { description: OTP resent, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+      '429': { $ref: '#/components/responses/RateLimited' }
+
+/auth/signup/complete:
+  post:
+    tags: [Auth]
+    summary: Step 3 — Submit KYC (full name, NIN, DOB, state/LGA, selfie URL)
+    description: |
+      Creates the `agent_application` row, attempts NIN verification, and
+      transitions the agent profile to status=pending. Admin approval is
+      required before the agent can sign in to the field app.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SignupCompleteRequest' }
+    responses:
+      '200':
+        description: Application submitted
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties:
+                        status: { type: string, example: pending }
+                        message: { type: string }
+                        ninVerification: { type: string, enum: [verified, mismatch, failed] }
+      '401': { $ref: '#/components/responses/Unauthorized' }
+      '422': { $ref: '#/components/responses/Validation' }
+
+/auth/login:
+  post:
+    tags: [Auth]
+    security: []
+    summary: Log in with email + password
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/LoginRequest' }
+    responses:
+      '200':
+        description: Authenticated; tokens returned
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties: { data: { $ref: '#/components/schemas/LoginResponse' } }
+      '401':
+        description: Invalid credentials
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+      '429': { $ref: '#/components/responses/RateLimited' }
+
+/auth/refresh:
+  post:
+    tags: [Auth]
+    security: []
+    summary: Exchange a refresh token for a new access + refresh pair
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/RefreshRequest' }
+    responses:
+      '200':
+        description: New tokens issued
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties: { data: { $ref: '#/components/schemas/LoginResponse' } }
+      '401': { $ref: '#/components/responses/Unauthorized' }
+
+/auth/logout:
+  post:
+    tags: [Auth]
+    summary: Log out (records the activity; client must discard tokens)
+    responses:
+      '200': { description: Logged out, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/auth/forgot-password:
+  post:
+    tags: [Auth]
+    security: []
+    summary: Send a password-reset OTP
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ForgotPasswordRequest' }
+    responses:
+      '200': { description: OTP sent (response is always 200 to avoid leaking which emails exist), content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/auth/reset-password:
+  post:
+    tags: [Auth]
+    security: []
+    summary: Reset password using the OTP from the reset email
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ResetPasswordRequest' }
+    responses:
+      '200': { description: Password reset, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+      '400': { description: Invalid or expired OTP, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+
+/auth/change-password:
+  post:
+    tags: [Auth]
+    summary: Change password while signed in (also used for "first login" enforcement)
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+    responses:
+      '200': { description: Password changed, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+      '400': { description: Current password incorrect, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+
+/auth/me:
+  get:
+    tags: [Auth]
+    summary: Get the current user, including role, partner, and application status
+    responses:
+      '200':
+        description: Current user
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties:
+                        user: { $ref: '#/components/schemas/UserPublic' }
+                        application: { $ref: '#/components/schemas/AgentApplication', nullable: true }
+                        partner: { $ref: '#/components/schemas/Partner', nullable: true }
+      '401': { $ref: '#/components/responses/Unauthorized' }

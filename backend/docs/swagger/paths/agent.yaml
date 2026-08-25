@@ -1,0 +1,719 @@
+/agent/dashboard:
+  get:
+    tags: [Agent — Dashboard]
+    summary: Field agent dashboard counts and recent activity
+    responses:
+      '200':
+        description: Dashboard data
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties:
+                        cooperatives: { type: integer }
+                        farmers: { type: integer }
+                        deliveries: { type: integer }
+                        financing:
+                          type: object
+                          properties:
+                            pending: { type: integer }
+                            approved: { type: integer }
+                            rejected: { type: integer }
+                            disbursed: { type: integer }
+                            completed: { type: integer }
+                        recentActivity:
+                          type: array
+                          items: { type: object }
+
+/agent/profile:
+  patch:
+    tags: [Agent — Profile]
+    summary: Update profile (name, phone, state, lga, avatar)
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              fullName: { type: string }
+              phone: { type: string }
+              state: { type: string }
+              lga: { type: string }
+              avatarUrl: { type: string, format: uri }
+    responses:
+      '200': { description: Profile updated, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+  delete:
+    tags: [Agent — Profile]
+    summary: Soft-delete the agent's own account
+    responses:
+      '200': { description: Account suspended and auth user deleted, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/agent/profile/export:
+  get:
+    tags: [Agent — Profile]
+    summary: Export the agent's data (cooperatives, farmers, deliveries, financing, repayments)
+    responses:
+      '200':
+        description: Full export
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+
+/agent/cooperatives:
+  get:
+    tags: [Agent — Cooperatives]
+    summary: List cooperatives created by this agent
+    parameters:
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+      - $ref: '#/components/parameters/SearchParam'
+      - $ref: '#/components/parameters/StateParam'
+      - $ref: '#/components/parameters/LgaParam'
+      - $ref: '#/components/parameters/CropParam'
+    responses:
+      '200':
+        description: Page of cooperatives
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties:
+                    data:
+                      type: array
+                      items: { $ref: '#/components/schemas/Cooperative' }
+  post:
+    tags: [Agent — Cooperatives]
+    summary: Create a cooperative
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CooperativeCreateRequest' }
+    responses:
+      '201':
+        description: Cooperative created
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties: { data: { $ref: '#/components/schemas/Cooperative' } }
+
+/agent/cooperatives/{cooperativeId}:
+  parameters:
+    - name: cooperativeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Agent — Cooperatives]
+    summary: Get a single cooperative with stats
+    responses:
+      '200': { description: Cooperative detail, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+      '404': { $ref: '#/components/responses/NotFound' }
+  patch:
+    tags: [Agent — Cooperatives]
+    summary: Update a cooperative
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CooperativeUpdateRequest' }
+    responses:
+      '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+  delete:
+    tags: [Agent — Cooperatives]
+    summary: Delete a cooperative (cascades to farmers)
+    responses:
+      '200': { description: Deleted, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/agent/cooperatives/{cooperativeId}/farmers:
+  parameters:
+    - name: cooperativeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Agent — Cooperatives]
+    summary: List farmers within a specific cooperative
+    parameters:
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200':
+        description: Page of farmers
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/Farmer' } } }
+
+/agent/farmers:
+  get:
+    tags: [Agent — Farmers]
+    summary: List farmers onboarded by this agent
+    parameters:
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+      - $ref: '#/components/parameters/SearchParam'
+      - { name: cooperativeId, in: query, schema: { type: string, format: uuid } }
+      - $ref: '#/components/parameters/StateParam'
+      - $ref: '#/components/parameters/LgaParam'
+      - $ref: '#/components/parameters/TierParam'
+    responses:
+      '200':
+        description: Page of farmers
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/Farmer' } } }
+  post:
+    tags: [Agent — Farmers]
+    summary: Onboard a new farmer (with optional farm profile + NIN auto-verification)
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/FarmerCreateRequest' }
+    responses:
+      '201':
+        description: Farmer created
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties: { data: { $ref: '#/components/schemas/Farmer' } }
+
+/agent/farmers/{farmerId}:
+  parameters:
+    - name: farmerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Agent — Farmers]
+    summary: Get a farmer (with cooperative, farm profile, and current credit score)
+    responses:
+      '200': { description: Farmer detail, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+  patch:
+    tags: [Agent — Farmers]
+    summary: Update a farmer (and farm profile if provided)
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/FarmerUpdateRequest' }
+    responses:
+      '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+  delete:
+    tags: [Agent — Farmers]
+    summary: Delete a farmer
+    responses:
+      '200': { description: Deleted, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/agent/farmers/{farmerId}/verify-nin:
+  parameters:
+    - name: farmerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Agent — Farmers]
+    summary: Re-run NIN verification for a farmer
+    responses:
+      '200':
+        description: Verification result
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties:
+                        status: { type: string, enum: [verified, mismatch, failed] }
+                        details: { type: object }
+
+/agent/farmers/{farmerId}/credit-score:
+  parameters:
+    - name: farmerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Agent — Farmers]
+    summary: Get a farmer's current credit score and history (last 20)
+    responses:
+      '200':
+        description: Score and history
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties:
+                        current: { $ref: '#/components/schemas/CreditScore', nullable: true }
+                        history: { type: array, items: { type: object } }
+
+/agent/productions:
+  get:
+    tags: [Agent — Production]
+    summary: List production cycles (planting/harvest records)
+    parameters:
+      - { name: farmerId, in: query, schema: { type: string, format: uuid } }
+      - $ref: '#/components/parameters/CropParam'
+      - { name: season, in: query, schema: { type: string } }
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200':
+        description: Page of production records
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/Production' } } }
+  post:
+    tags: [Agent — Production]
+    summary: Record a production cycle (planting and/or actual yield)
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ProductionCreateRequest' }
+    responses:
+      '201':
+        description: Created
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+
+/agent/deliveries:
+  get:
+    tags: [Agent — Deliveries]
+    summary: List produce deliveries
+    parameters:
+      - { name: cooperativeId, in: query, schema: { type: string, format: uuid } }
+      - $ref: '#/components/parameters/SearchParam'
+      - $ref: '#/components/parameters/StartDateParam'
+      - $ref: '#/components/parameters/EndDateParam'
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200':
+        description: Page of deliveries
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/Delivery' } } }
+  post:
+    tags: [Agent — Deliveries]
+    summary: Log a new delivery
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/DeliveryCreateRequest' }
+    responses:
+      '201':
+        description: Delivery logged
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties: { data: { $ref: '#/components/schemas/Delivery' } }
+
+/agent/deliveries/{deliveryId}:
+  parameters:
+    - name: deliveryId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Agent — Deliveries]
+    summary: Get a single delivery
+    responses:
+      '200': { description: Delivery, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/agent/financing-requests:
+  get:
+    tags: [Agent — Financing]
+    summary: List financing requests submitted by this agent
+    parameters:
+      - $ref: '#/components/parameters/StatusParam'
+      - { name: cooperativeId, in: query, schema: { type: string, format: uuid } }
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200':
+        description: Page of financing requests
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/FinancingRequest' } } }
+  post:
+    tags: [Agent — Financing]
+    summary: Submit a financing request (admin reviews, may forward to a partner)
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/FinancingCreateRequest' }
+    responses:
+      '201':
+        description: Submitted
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties: { data: { $ref: '#/components/schemas/FinancingRequest' } }
+
+/agent/financing-requests/{requestId}:
+  parameters:
+    - name: requestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Agent — Financing]
+    summary: Get a financing request with cooperative + repayments
+    responses:
+      '200': { description: Detail, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/agent/repayments:
+  get:
+    tags: [Agent — Repayments]
+    summary: List repayments recorded by this agent
+    parameters:
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+      - $ref: '#/components/parameters/StartDateParam'
+      - $ref: '#/components/parameters/EndDateParam'
+    responses:
+      '200':
+        description: Page of repayments
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/Repayment' } } }
+  post:
+    tags: [Agent — Repayments]
+    summary: Record a repayment against a financing request
+    description: |
+      The `contextFlag` field lets agents mark late repayments caused by genuine
+      external events (`weather`, `market`, `health`); these are excluded from
+      the timeliness penalty in the credit score.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/RepaymentCreateRequest' }
+    responses:
+      '201':
+        description: Recorded
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        outstandingBalance: { type: number }
+
+/agent/wallet:
+  get:
+    tags: [Agent — Wallet]
+    summary: Get this agent's wallet (auto-created on first call)
+    responses:
+      '200':
+        description: Wallet
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties: { data: { $ref: '#/components/schemas/Wallet' } }
+
+/agent/wallet/transactions:
+  get:
+    tags: [Agent — Wallet]
+    summary: List wallet transactions
+    parameters:
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200':
+        description: Page of transactions
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/WalletTransaction' } } }
+
+/agent/wallet/transactions/{transactionId}:
+  parameters:
+    - name: transactionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Agent — Wallet]
+    summary: Get a single transaction
+    responses:
+      '200': { description: Transaction, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/agent/wallet/settlements:
+  get:
+    tags: [Agent — Wallet]
+    summary: List the agent's settlement requests
+    parameters:
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200':
+        description: Page of settlements
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/SettlementRequest' } } }
+  post:
+    tags: [Agent — Wallet]
+    summary: Request a settlement (withdraw to bank)
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SettlementCreateRequest' }
+    responses:
+      '201':
+        description: Settlement created
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties: { data: { $ref: '#/components/schemas/SettlementRequest' } }
+
+/agent/notifications:
+  get:
+    tags: [Agent — Notifications]
+    summary: List notifications
+    parameters:
+      - { name: unread, in: query, schema: { type: boolean } }
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200':
+        description: Page of notifications
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/Notification' } } }
+  delete:
+    tags: [Agent — Notifications]
+    summary: Clear all notifications
+    responses:
+      '200': { description: Cleared, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/agent/notifications/unread-count:
+  get:
+    tags: [Agent — Notifications]
+    summary: Get unread count
+    responses:
+      '200':
+        description: Count
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties: { count: { type: integer } }
+
+/agent/notifications/read-all:
+  patch:
+    tags: [Agent — Notifications]
+    summary: Mark every notification as read
+    responses:
+      '200': { description: All marked, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/agent/notifications/{notificationId}/read:
+  parameters:
+    - name: notificationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  patch:
+    tags: [Agent — Notifications]
+    summary: Mark a single notification as read
+    responses:
+      '200': { description: Marked, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/agent/uploads/{kind}:
+  parameters:
+    - name: kind
+      in: path
+      required: true
+      description: |
+        One of: `selfie`, `farmer_id`, `farmer_photo`, `farm_photo`,
+        `delivery_proof`, `transaction_receipt`, `avatar`.
+      schema:
+        type: string
+        enum: [selfie, farmer_id, farmer_photo, farm_photo, delivery_proof, transaction_receipt, avatar]
+  post:
+    tags: [Agent — Uploads]
+    summary: Upload an image file (multipart/form-data, field name "file")
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            properties:
+              file: { type: string, format: binary }
+    responses:
+      '201':
+        description: Uploaded
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties: { data: { $ref: '#/components/schemas/UploadResponse' } }
+
+/agent/uploads-doc/{kind}:
+  parameters:
+    - name: kind
+      in: path
+      required: true
+      description: Same set as `/uploads/{kind}` plus `land_doc` (accepts PDF)
+      schema:
+        type: string
+        enum: [land_doc, farmer_id, delivery_proof, transaction_receipt]
+  post:
+    tags: [Agent — Uploads]
+    summary: Upload a document (image or PDF, up to 15MB)
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            properties:
+              file: { type: string, format: binary }
+    responses:
+      '201': { description: Uploaded, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/agent/uploads/sign-url:
+  post:
+    tags: [Agent — Uploads]
+    summary: Get a fresh signed URL for a previously uploaded file
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [bucket, path]
+            properties:
+              bucket: { type: string }
+              path: { type: string }
+    responses:
+      '200': { description: Signed URL returned, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/agent/imports:
+  get:
+    tags: [Agent — Imports]
+    summary: List previous bulk imports for this agent
+    parameters:
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200': { description: Page of imports, content: { application/json: { schema: { $ref: '#/components/schemas/PaginatedEnvelope' } } } }
+  post:
+    tags: [Agent — Imports]
+    summary: Bulk-import farmers from a CSV
+    description: |
+      Multipart upload, field name `file`. Required CSV columns:
+      `cooperative_name, state, lga, farmer_full_name, gender, phone, nin, date_of_birth, farm_size_acres, crop_type`.
+      Cooperatives are auto-created if they don't exist for this agent.
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            properties:
+              file: { type: string, format: binary }
+    responses:
+      '201':
+        description: Import summary
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties:
+                        importLog: { type: object }
+                        summary:
+                          type: object
+                          properties:
+                            totalRows: { type: integer }
+                            successful: { type: integer }
+                            failed: { type: integer }
+                            cooperativesCreated: { type: integer }
+                            farmersCreated: { type: integer }
+                        errors:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              line: { type: integer }
+                              message: { type: string }
+
+/agent/imports/template:
+  get:
+    tags: [Agent — Imports]
+    summary: Download a CSV template with example rows
+    responses:
+      '200':
+        description: CSV file
+        content:
+          text/csv:
+            schema: { type: string }

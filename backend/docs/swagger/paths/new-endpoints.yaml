@@ -1,0 +1,242 @@
+# =============================================================================
+# New endpoints added for: farmer financing-history, manual money flow
+# (disbursements + cash-purchases + proof), PDF exports, and partner
+# self-service. Loaded automatically by src/config/swagger.js (it inlines
+# every *.yaml in docs/swagger/paths/).
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# AGENT — farmer financing history
+# ---------------------------------------------------------------------------
+/agent/farmers/{farmerId}/financing-history:
+  parameters:
+    - name: farmerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Agent — Farmers]
+    summary: Full financing history for one farmer
+    description: >
+      Returns every financing request tied to this farmer (direct + cooperative-level),
+      each with its repayment trail and computed outstanding balance, plus grand totals.
+    responses:
+      '200': { description: Financing history, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+# ---------------------------------------------------------------------------
+# AGENT — manual cash purchases (with proof)
+# ---------------------------------------------------------------------------
+/agent/wallet/cash-purchases:
+  get:
+    tags: [Agent — Wallet]
+    summary: List my recorded cash purchases
+    parameters:
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200': { description: Page of cash-purchase transactions, content: { application/json: { schema: { $ref: '#/components/schemas/PaginatedEnvelope' } } } }
+  post:
+    tags: [Agent — Wallet]
+    summary: Record a purchase made for a farmer (uploads proof)
+    description: Creates a debit wallet_transaction with source=cash_purchase, status=pending, awaiting admin confirmation.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [farmerId, amount]
+            properties:
+              farmerId: { type: string, format: uuid }
+              financingRequestId: { type: string, format: uuid }
+              amount: { type: number, example: 25000 }
+              description: { type: string, example: 50kg fertiliser }
+              referenceNumber: { type: string }
+              paymentMethod: { type: string, enum: [cash, bank_transfer, mobile_money, in_kind], default: cash }
+              receiptImageUrl: { type: string, format: uri }
+              proofImageUrls: { type: array, items: { type: string, format: uri } }
+    responses:
+      '201': { description: Purchase recorded (pending), content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+# ---------------------------------------------------------------------------
+# ADMIN — disbursements to agents (with proof)
+# ---------------------------------------------------------------------------
+/admin/disbursements:
+  post:
+    tags: [Admin — Wallet]
+    summary: Record a manual transfer of cash to a field agent (with receipt proof)
+    description: Credits the agent's wallet and creates a credit wallet_transaction visible in the agent's history.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [agentId, amount]
+            properties:
+              agentId: { type: string, format: uuid }
+              amount: { type: number, example: 200000 }
+              source: { type: string, default: admin_disbursement }
+              description: { type: string }
+              referenceNumber: { type: string }
+              recipientName: { type: string }
+              paymentMethod: { type: string, enum: [cash, bank_transfer, mobile_money, in_kind], default: bank_transfer }
+              receiptImageUrl: { type: string, format: uri }
+              proofImageUrls: { type: array, items: { type: string, format: uri } }
+              relatedFinancingId: { type: string, format: uuid }
+    responses:
+      '201': { description: Disbursement recorded, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/transactions:
+  get:
+    tags: [Admin — Wallet]
+    summary: List all wallet transactions
+    parameters:
+      - { name: source, in: query, schema: { type: string } }
+      - { name: agentId, in: query, schema: { type: string, format: uuid } }
+      - { name: transactionType, in: query, schema: { type: string, enum: [credit, debit, settlement] } }
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200': { description: Page of transactions, content: { application/json: { schema: { $ref: '#/components/schemas/PaginatedEnvelope' } } } }
+
+# ---------------------------------------------------------------------------
+# ADMIN — confirm field-agent purchase proofs
+# ---------------------------------------------------------------------------
+/admin/cash-purchases:
+  get:
+    tags: [Admin — Wallet]
+    summary: List field-agent purchase proofs
+    parameters:
+      - { name: status, in: query, schema: { type: string, enum: [pending, completed, failed] } }
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200': { description: Page of purchase records (with agent profile), content: { application/json: { schema: { $ref: '#/components/schemas/PaginatedEnvelope' } } } }
+
+/admin/cash-purchases/{transactionId}/confirm:
+  parameters:
+    - name: transactionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Admin — Wallet]
+    summary: Confirm or reject a field-agent purchase proof
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [decision]
+            properties:
+              decision: { type: string, enum: [confirm, reject] }
+              adminNotes: { type: string }
+    responses:
+      '200': { description: Updated status, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+# ---------------------------------------------------------------------------
+# AGENT + ADMIN — PDF export data
+# ---------------------------------------------------------------------------
+/agent/exports/agent:
+  get:
+    tags: [Agent — Exports]
+    summary: Structured data for the Agent PDF export
+    responses:
+      '200': { description: Export payload, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+/agent/exports/farmer/{farmerId}:
+  parameters:
+    - { name: farmerId, in: path, required: true, schema: { type: string, format: uuid } }
+  get:
+    tags: [Agent — Exports]
+    summary: Structured data for the Farmer PDF export
+    responses:
+      '200': { description: Export payload, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+/agent/exports/cooperative/{cooperativeId}:
+  parameters:
+    - { name: cooperativeId, in: path, required: true, schema: { type: string, format: uuid } }
+  get:
+    tags: [Agent — Exports]
+    summary: Structured data for the Cooperative PDF export
+    responses:
+      '200': { description: Export payload, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+# ---------------------------------------------------------------------------
+# PARTNER — self-service organisation profile
+# ---------------------------------------------------------------------------
+/partner/organization:
+  get:
+    tags: [Partner — Profile]
+    summary: Get my partner organisation
+    responses:
+      '200': { description: Organisation, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+  patch:
+    tags: [Partner — Profile]
+    summary: Update my partner organisation (email not editable)
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              organizationName: { type: string }
+              contactPhone: { type: string }
+              contactName: { type: string }
+              address: { type: string }
+              state: { type: string }
+              website: { type: string, format: uri }
+              taxId: { type: string }
+              logoUrl: { type: string, format: uri }
+    responses:
+      '200': { description: Updated organisation, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+# ---------------------------------------------------------------------------
+# ADMIN — financing decision now accepts disbursement detail fields
+# (additive; existing calls unaffected)
+# ---------------------------------------------------------------------------
+# POST /admin/financing-requests/{requestId}/decision  (decision=disbursed)
+# extra optional body fields:
+#   disbursementAccountDetails : string  (bank/account the funds were sent to)
+#   disbursementReference      : string
+#   disbursementProofUrls      : string[] (receipt/proof image or PDF URLs)
+# These are persisted on the financing_requests row and visible to the agent.
+
+# ---------------------------------------------------------------------------
+# ADMIN — void (reverse) a repayment
+# ---------------------------------------------------------------------------
+/admin/repayments/{repaymentId}/void:
+  parameters:
+    - name: repaymentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Admin — Repayments]
+    summary: Void a mistaken repayment (audit-safe reverse)
+    description: >
+      Marks the repayment voided (not deleted), excludes it from the balance and
+      credit score, recomputes both, and reverts the loan from completed to
+      disbursed if it now has an outstanding balance again.
+    requestBody:
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              reason: { type: string }
+    responses:
+      '200': { description: Voided, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/repayments/{repaymentId}:
+  parameters:
+    - name: repaymentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Admin — Repayments]
+    summary: Get one repayment record
+    responses:
+      '200': { description: Repayment, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }

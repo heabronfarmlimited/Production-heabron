@@ -1,0 +1,111 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    font-feature-settings: 'ss01', 'cv11';
+  }
+  h1, h2, h3, h4 {
+    font-family: 'Fraunces', Georgia, serif;
+    letter-spacing: -0.02em;
+  }
+  /* Numeric tabular figures for tables and metrics */
+  .tabular { font-variant-numeric: tabular-nums; }
+}
+
+@layer components {
+  /* Glassy card shell used across dashboards */
+  .card {
+    @apply bg-white rounded-2xl shadow-card border border-whisper/60;
+  }
+  .card-pad { @apply p-6 md:p-7; }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-forest-500 text-white hover:bg-forest-600 active:scale-[0.98] shadow-sm;
+  }
+  .btn-secondary {
+    @apply btn bg-white text-ink border border-whisper hover:bg-bone hover:border-forest-200;
+  }
+  .btn-ghost {
+    @apply btn text-smoke hover:text-ink hover:bg-bone;
+  }
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700;
+  }
+  .btn-accent {
+    @apply btn bg-harvest-400 text-forest-800 hover:bg-harvest-300 font-semibold;
+  }
+
+  /* Form inputs */
+  .input {
+    @apply block w-full rounded-xl border border-whisper bg-white px-4 py-2.5 text-sm text-ink placeholder:text-smoke/60 focus:border-forest-500 focus:outline-none focus:ring-2 focus:ring-forest-500/10 transition;
+  }
+  .label {
+    @apply block text-xs font-semibold uppercase tracking-wider text-smoke mb-1.5;
+  }
+
+  /* Tier pills */
+  .pill { @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold; }
+  .pill-A { @apply pill bg-forest-50 text-forest-700 ring-1 ring-forest-200; }
+  .pill-B { @apply pill bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200; }
+  .pill-C { @apply pill bg-harvest-50 text-harvest-700 ring-1 ring-harvest-200; }
+  .pill-D { @apply pill bg-red-50 text-red-700 ring-1 ring-red-200; }
+  .pill-neutral { @apply pill bg-bone text-smoke ring-1 ring-whisper; }
+
+  /* Status pills */
+  .status-active   { @apply pill bg-forest-50 text-forest-700 ring-1 ring-forest-200; }
+  .status-pending  { @apply pill bg-harvest-50 text-harvest-700 ring-1 ring-harvest-200; }
+  .status-rejected { @apply pill bg-red-50 text-red-700 ring-1 ring-red-200; }
+  .status-suspended{ @apply pill bg-smoke/10 text-smoke ring-1 ring-smoke/20; }
+
+  /* Subtle dividers */
+  .divider { @apply border-t border-whisper/70; }
+
+  /* Sidebar nav link */
+  .nav-link {
+    @apply flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium text-smoke hover:text-ink hover:bg-bone transition;
+  }
+  .nav-link-active {
+    @apply nav-link text-forest-700 bg-forest-50 hover:bg-forest-50 hover:text-forest-700;
+  }
+
+  /* Section heading */
+  .section-title {
+    @apply text-2xl md:text-3xl font-display font-semibold text-ink;
+  }
+  .section-sub {
+    @apply text-sm text-smoke mt-1;
+  }
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.2em] text-forest-500;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #D6D3C2; border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: #9AA0A6; background-clip: content-box; border: 2px solid transparent; }
+
+/* Loading skeletons */
+.skeleton {
+  background: linear-gradient(90deg, #E8E5D9 25%, #F5F4EE 50%, #E8E5D9 75%);
+  background-size: 200% 100%;
+  animation: skeleton 1.4s ease-in-out infinite;
+  border-radius: 8px;
+}
+@keyframes skeleton {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}

@@ -1,0 +1,206 @@
+/partner/dashboard:
+  get:
+    tags: [Partner — Dashboard]
+    summary: Partner portal dashboard (totals, risk distribution)
+    responses:
+      '200':
+        description: Dashboard data
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties:
+                        totals:
+                          type: object
+                          properties:
+                            requestsPending: { type: integer }
+                            requestsApproved: { type: integer }
+                            requestsRejected: { type: integer }
+                            totalApprovedAmount: { type: number }
+                            cooperativesInSystem: { type: integer }
+                            farmersInSystem: { type: integer }
+                        riskDistribution:
+                          type: object
+                          properties:
+                            A: { type: integer }
+                            B: { type: integer }
+                            C: { type: integer }
+                            D: { type: integer }
+
+/partner/search:
+  get:
+    tags: [Partner — Search]
+    summary: Universal borrower search (cooperatives + farmers)
+    parameters:
+      - { name: q, in: query, required: true, schema: { type: string }, description: 'Substring to match cooperative or farmer name' }
+      - { name: type, in: query, schema: { type: string, enum: [all, cooperative, farmer], default: all } }
+    responses:
+      '200':
+        description: Search results
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties:
+                        cooperatives:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id: { type: string, format: uuid }
+                              name: { type: string }
+                              location: { type: string }
+                              members: { type: integer }
+                              score: { type: number, nullable: true }
+                              tier: { type: string, enum: [A, B, C, D], nullable: true }
+                              risk: { type: string, enum: [low, moderate, high, unknown] }
+                        farmers:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id: { type: string, format: uuid }
+                              name: { type: string }
+                              cooperative: { type: string, nullable: true }
+                              location: { type: string }
+                              score: { type: number, nullable: true }
+                              tier: { type: string, enum: [A, B, C, D], nullable: true }
+                              risk: { type: string, enum: [low, moderate, high, unknown] }
+
+/partner/portfolio:
+  get:
+    tags: [Partner — Portfolio]
+    summary: Portfolio monitoring of cooperatives this partner has financed
+    responses:
+      '200':
+        description: Portfolio data
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties:
+                        cooperatives:
+                          type: array
+                          items: { type: object }
+                        summary:
+                          type: object
+                          properties:
+                            totalCooperatives: { type: integer }
+                            totalAmountFinanced: { type: number }
+                            averageScore: { type: number }
+                        riskDistribution: { type: object }
+                        geographicDistribution: { type: object }
+
+/partner/watchlist:
+  get:
+    tags: [Partner — Portfolio]
+    summary: High-risk (Tier C/D) borrowers this partner has financed
+    responses:
+      '200': { description: Watchlist, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/partner/credit/farmers/{farmerId}/report:
+  parameters:
+    - name: farmerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Partner — Credit Reports]
+    summary: Full credit report for one farmer
+    responses:
+      '200':
+        description: Report
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties:
+                        subject: { type: object }
+                        score: { $ref: '#/components/schemas/CreditScore', nullable: true }
+                        trend: { type: array, items: { type: object } }
+                        financingHistory: { type: array, items: { $ref: '#/components/schemas/FinancingRequest' } }
+                        repaymentHistory: { type: array, items: { $ref: '#/components/schemas/Repayment' } }
+                        recentDeliveries: { type: array, items: { $ref: '#/components/schemas/Delivery' } }
+                        riskFlags:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              type: { type: string }
+                              severity: { type: string, enum: [low, medium, high] }
+                              message: { type: string }
+
+/partner/credit/cooperatives/{cooperativeId}/report:
+  parameters:
+    - name: cooperativeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Partner — Credit Reports]
+    summary: Full credit report for one cooperative
+    responses:
+      '200': { description: Report, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/partner/financing-requests:
+  get:
+    tags: [Partner — Financing]
+    summary: List financing requests forwarded to this partner
+    parameters:
+      - $ref: '#/components/parameters/StatusParam'
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200':
+        description: Page of forwarded requests
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/FinancingRequest' } } }
+
+/partner/financing-requests/{requestId}:
+  parameters:
+    - name: requestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Partner — Financing]
+    summary: Get a single forwarded financing request
+    responses:
+      '200': { description: Detail, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/partner/financing-requests/{requestId}/decision:
+  parameters:
+    - name: requestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Partner — Financing]
+    summary: Partner approves or rejects a forwarded financing request
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PartnerFinancingDecisionRequest' }
+    responses:
+      '200': { description: Decision recorded, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }

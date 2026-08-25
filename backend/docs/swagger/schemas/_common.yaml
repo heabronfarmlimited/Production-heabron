@@ -1,0 +1,58 @@
+SuccessEnvelope:
+  type: object
+  required: [success, data]
+  properties:
+    success: { type: boolean, example: true }
+    data: { type: object }
+    meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+PaginatedEnvelope:
+  type: object
+  required: [success, data, meta]
+  properties:
+    success: { type: boolean, example: true }
+    data:
+      type: array
+      items: { type: object }
+    meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+PaginationMeta:
+  type: object
+  properties:
+    page: { type: integer, example: 1 }
+    pageSize: { type: integer, example: 20 }
+    total: { type: integer, example: 134 }
+    totalPages: { type: integer, example: 7 }
+
+ErrorEnvelope:
+  type: object
+  required: [success, error]
+  properties:
+    success: { type: boolean, example: false }
+    error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: BAD_REQUEST
+          enum: [BAD_REQUEST, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT, UNPROCESSABLE_ENTITY, TOO_MANY_REQUESTS, INTERNAL_ERROR, PAYLOAD_TOO_LARGE]
+        message: { type: string, example: "Validation failed" }
+        details:
+          oneOf:
+            - type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+            - type: object
+            - type: string
+
+OkResponse:
+  type: object
+  properties:
+    success: { type: boolean }
+    data:
+      type: object
+      additionalProperties: true

@@ -1,0 +1,440 @@
+Cooperative:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    name: { type: string }
+    registration_number: { type: string, nullable: true }
+    leader_name: { type: string, nullable: true }
+    leader_phone: { type: string, nullable: true }
+    crops_supported:
+      type: array
+      items: { type: string }
+    state: { type: string }
+    lga: { type: string }
+    address: { type: string, nullable: true }
+    estimated_land_size: { type: number, format: float }
+    logo_url: { type: string, format: uri, nullable: true }
+    gps_lat: { type: number, format: float, nullable: true }
+    gps_lng: { type: number, format: float, nullable: true }
+    gps_polygon:
+      type: array
+      nullable: true
+      items:
+        type: object
+        properties:
+          lat: { type: number }
+          lng: { type: number }
+    cooperative_tier: { type: string, enum: [A, B, C, D], nullable: true }
+    average_credit_score: { type: number, format: float }
+    total_members: { type: integer }
+    created_by_agent_id: { type: string, format: uuid }
+    created_at: { type: string, format: date-time }
+    updated_at: { type: string, format: date-time }
+
+CooperativeCreateRequest:
+  type: object
+  required: [name, state, lga]
+  properties:
+    name: { type: string, example: Hamsel Industries }
+    registrationNumber: { type: string, nullable: true }
+    leaderName: { type: string }
+    leaderPhone: { type: string }
+    cropsSupported:
+      type: array
+      items: { type: string }
+    state: { type: string, example: Oyo }
+    lga: { type: string, example: Akinyele }
+    address: { type: string }
+    estimatedLandSize: { type: number }
+    logoUrl: { type: string, format: uri }
+    gpsLat: { type: number }
+    gpsLng: { type: number }
+    gpsPolygon:
+      type: array
+      items:
+        type: object
+        properties:
+          lat: { type: number }
+          lng: { type: number }
+
+CooperativeUpdateRequest:
+  allOf:
+    - $ref: '#/components/schemas/CooperativeCreateRequest'
+
+Farmer:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    cooperative_id: { type: string, format: uuid }
+    full_name: { type: string }
+    date_of_birth: { type: string, format: date, nullable: true }
+    gender: { type: string, enum: [male, female, other], nullable: true }
+    phone: { type: string, nullable: true }
+    alt_phone: { type: string, nullable: true }
+    address: { type: string, nullable: true }
+    state: { type: string, nullable: true }
+    lga: { type: string, nullable: true }
+    household_size: { type: integer }
+    dependents: { type: integer }
+    education_level: { type: string, nullable: true }
+    nin: { type: string, nullable: true }
+    nin_verification_status: { type: string, enum: [pending, verified, mismatch, failed] }
+    id_image_url: { type: string, format: uri, nullable: true }
+    farmer_photo_url: { type: string, format: uri, nullable: true }
+    credit_score: { type: number, format: float }
+    credit_tier: { type: string, enum: [A, B, C, D], nullable: true }
+    created_at: { type: string, format: date-time }
+    updated_at: { type: string, format: date-time }
+
+FarmProfile:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    farmer_id: { type: string, format: uuid }
+    farm_size_acres: { type: number, format: float }
+    crop_type: { type: string }
+    secondary_crops: { type: array, items: { type: string }, nullable: true }
+    soil_type: { type: string, nullable: true }
+    irrigation_access: { type: boolean }
+    water_source: { type: string, nullable: true }
+    land_ownership: { type: string, nullable: true }
+    years_experience: { type: integer }
+    farm_photo_urls: { type: array, items: { type: string, format: uri }, nullable: true }
+
+FarmerCreateRequest:
+  type: object
+  required: [cooperativeId, fullName]
+  properties:
+    cooperativeId: { type: string, format: uuid }
+    fullName: { type: string }
+    dateOfBirth: { type: string, format: date }
+    gender: { type: string, enum: [male, female, other] }
+    phone: { type: string }
+    altPhone: { type: string }
+    address: { type: string }
+    state: { type: string }
+    lga: { type: string }
+    householdSize: { type: integer }
+    dependents: { type: integer }
+    educationLevel: { type: string }
+    nin: { type: string, pattern: '^\d{11}$' }
+    bvn: { type: string, pattern: '^\d{11}$' }
+    idImageUrl: { type: string, format: uri }
+    farmerPhotoUrl: { type: string, format: uri }
+    farm:
+      type: object
+      required: [farmSizeAcres, cropType]
+      properties:
+        farmSizeAcres: { type: number }
+        cropType: { type: string }
+        secondaryCrops: { type: array, items: { type: string } }
+        soilType: { type: string }
+        irrigationAccess: { type: boolean }
+        waterSource: { type: string }
+        landOwnership: { type: string }
+        yearsExperience: { type: integer }
+        gpsLat: { type: number }
+        gpsLng: { type: number }
+        landDocumentUrl: { type: string, format: uri }
+        landDocumentType: { type: string }
+        farmPhotoUrls:
+          type: array
+          items: { type: string, format: uri }
+
+FarmerUpdateRequest:
+  allOf:
+    - $ref: '#/components/schemas/FarmerCreateRequest'
+
+Delivery:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    farmer_id: { type: string, format: uuid }
+    cooperative_id: { type: string, format: uuid }
+    crop: { type: string }
+    quantity_kg: { type: number }
+    quality_grade: { type: string, enum: [A, B, C, D] }
+    price_per_kg: { type: number, nullable: true }
+    total_value: { type: number, nullable: true }
+    date_delivered: { type: string, format: date }
+    receipt_number: { type: string, nullable: true }
+    proof_photo_urls: { type: array, items: { type: string, format: uri }, nullable: true }
+    payment_status: { type: string, enum: [pending, paid, overdue, defaulted] }
+    notes: { type: string, nullable: true }
+    created_at: { type: string, format: date-time }
+
+DeliveryCreateRequest:
+  type: object
+  required: [farmerId, crop, quantityKg]
+  properties:
+    farmerId: { type: string, format: uuid }
+    cooperativeId: { type: string, format: uuid }
+    crop: { type: string }
+    quantityKg: { type: number, minimum: 0 }
+    qualityGrade: { type: string, enum: [A, B, C, D] }
+    pricePerKg: { type: number, minimum: 0 }
+    dateDelivered: { type: string, format: date }
+    receiptNumber: { type: string }
+    proofPhotoUrls:
+      type: array
+      items: { type: string, format: uri }
+    notes: { type: string }
+
+FinancingRequest:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    cooperative_id: { type: string, format: uuid }
+    farmer_id: { type: string, format: uuid, nullable: true }
+    loan_amount: { type: number }
+    purpose: { type: string }
+    season: { type: string, enum: [wet, dry, all_year] }
+    repayment_window_days: { type: integer }
+    status: { type: string, enum: [pending, approved, rejected, disbursed, completed] }
+    forwarded_to_partner_id: { type: string, format: uuid, nullable: true }
+    partner_decision: { type: string, nullable: true }
+    approved_amount: { type: number, nullable: true }
+    disbursed_amount: { type: number, nullable: true }
+    due_date: { type: string, format: date, nullable: true }
+    rejection_reason: { type: string, nullable: true }
+    admin_comments: { type: string, nullable: true }
+    partner_comments: { type: string, nullable: true }
+    submitted_by_agent_id: { type: string, format: uuid }
+    created_at: { type: string, format: date-time }
+
+FinancingCreateRequest:
+  type: object
+  required: [cooperativeId, loanAmount, purpose, season]
+  properties:
+    cooperativeId: { type: string, format: uuid }
+    farmerId: { type: string, format: uuid }
+    loanAmount: { type: number, minimum: 1 }
+    purpose: { type: string }
+    season: { type: string, enum: [wet, dry, all_year] }
+    repaymentWindowDays: { type: integer, minimum: 30, maximum: 540, default: 180 }
+
+AdminFinancingDecisionRequest:
+  type: object
+  required: [decision]
+  properties:
+    decision: { type: string, enum: [approved, rejected, disbursed] }
+    approvedAmount: { type: number }
+    rejectionReason: { type: string }
+    adminComments: { type: string }
+    forwardToPartnerId: { type: string, format: uuid }
+    dueDate: { type: string, format: date }
+
+PartnerFinancingDecisionRequest:
+  type: object
+  required: [decision]
+  properties:
+    decision: { type: string, enum: [approved, rejected] }
+    approvedAmount: { type: number }
+    partnerComments: { type: string }
+    rejectionReason: { type: string }
+
+Repayment:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    financing_request_id: { type: string, format: uuid }
+    farmer_id: { type: string, format: uuid }
+    amount_paid: { type: number }
+    payment_date: { type: string, format: date }
+    payment_method: { type: string, enum: [cash, bank_transfer, mobile_money, in_kind] }
+    reference_number: { type: string, nullable: true }
+    proof_photo_url: { type: string, format: uri, nullable: true }
+    context_flag: { type: string, enum: [none, weather, market, health] }
+    context_notes: { type: string, nullable: true }
+
+RepaymentCreateRequest:
+  type: object
+  required: [financingRequestId, farmerId, amountPaid, paymentMethod]
+  properties:
+    financingRequestId: { type: string, format: uuid }
+    farmerId: { type: string, format: uuid }
+    amountPaid: { type: number, minimum: 0 }
+    paymentDate: { type: string, format: date }
+    paymentMethod: { type: string, enum: [cash, bank_transfer, mobile_money, in_kind] }
+    referenceNumber: { type: string }
+    proofPhotoUrl: { type: string, format: uri }
+    contextFlag: { type: string, enum: [none, weather, market, health], default: none }
+    contextNotes: { type: string }
+
+Production:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    farmer_id: { type: string, format: uuid }
+    cycle_number: { type: integer }
+    season: { type: string }
+    crop: { type: string }
+    expected_yield_tonnes: { type: number }
+    actual_yield_tonnes: { type: number, nullable: true }
+    benchmark_yield_tonnes: { type: number, nullable: true }
+    yield_ratio: { type: number, nullable: true }
+    notes: { type: string, nullable: true }
+
+ProductionCreateRequest:
+  type: object
+  required: [farmerId, season, crop]
+  properties:
+    farmerId: { type: string, format: uuid }
+    cycleNumber: { type: integer, minimum: 1, default: 1 }
+    season: { type: string }
+    crop: { type: string }
+    expectedPlantingDate: { type: string, format: date }
+    expectedHarvestDate: { type: string, format: date }
+    expectedYieldTonnes: { type: number }
+    actualYieldTonnes: { type: number }
+    benchmarkYieldTonnes: { type: number }
+    notes: { type: string }
+
+Wallet:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    agent_id: { type: string, format: uuid }
+    balance: { type: number }
+    status: { type: string, enum: [active, frozen, suspended] }
+    created_at: { type: string, format: date-time }
+    updated_at: { type: string, format: date-time }
+
+WalletTransaction:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    wallet_id: { type: string, format: uuid }
+    transaction_type: { type: string, enum: [credit, debit, settlement] }
+    amount: { type: number }
+    description: { type: string }
+    source: { type: string }
+    status: { type: string, enum: [pending, completed, failed, reversed] }
+    reference_number: { type: string, nullable: true }
+    recipient_name: { type: string, nullable: true }
+    payment_method: { type: string, nullable: true }
+    receipt_image_url: { type: string, format: uri, nullable: true }
+    proof_image_urls: { type: array, items: { type: string, format: uri }, nullable: true }
+    created_at: { type: string, format: date-time }
+
+SettlementRequest:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    agent_id: { type: string, format: uuid }
+    amount: { type: number }
+    bank_name: { type: string }
+    account_number: { type: string }
+    account_name: { type: string }
+    status: { type: string, enum: [pending, approved, rejected, completed] }
+    admin_notes: { type: string, nullable: true }
+    created_at: { type: string, format: date-time }
+
+SettlementCreateRequest:
+  type: object
+  required: [amount, bankName, accountNumber, accountName]
+  properties:
+    amount: { type: number, minimum: 1 }
+    bankName: { type: string }
+    accountNumber: { type: string, pattern: '^\d{10}$' }
+    accountName: { type: string }
+
+Notification:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    type: { type: string }
+    title: { type: string }
+    message: { type: string }
+    metadata: { type: object }
+    is_read: { type: boolean }
+    created_at: { type: string, format: date-time }
+
+CreditScore:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    farmer_id: { type: string, format: uuid }
+    production_score: { type: number, format: float }
+    repayment_score: { type: number, format: float }
+    repayment_rate_score: { type: number, format: float }
+    timeliness_score: { type: number, format: float }
+    default_history_score: { type: number, format: float }
+    final_credit_score: { type: number, format: float }
+    credit_tier: { type: string, enum: [A, B, C, D] }
+    is_first_cycle: { type: boolean }
+    has_active_default: { type: boolean }
+    cycle_count: { type: integer }
+    model_version: { type: string }
+    last_calculated_at: { type: string, format: date-time }
+
+CooperativeCreditScore:
+  type: object
+  properties:
+    cooperative_id: { type: string, format: uuid }
+    average_score: { type: number, format: float }
+    cooperative_tier: { type: string, enum: [A, B, C, D] }
+    total_farmers: { type: integer }
+    scored_farmers: { type: integer }
+    tier_a_count: { type: integer }
+    tier_b_count: { type: integer }
+    tier_c_count: { type: integer }
+    tier_d_count: { type: integer }
+    last_calculated_at: { type: string, format: date-time }
+
+Partner:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    organization_name: { type: string }
+    organization_email: { type: string, format: email }
+    contact_phone: { type: string, nullable: true }
+    address: { type: string, nullable: true }
+    state: { type: string, nullable: true }
+    logo_url: { type: string, format: uri, nullable: true }
+    status: { type: string, enum: [pending, active, suspended, rejected] }
+    created_at: { type: string, format: date-time }
+
+PartnerCreateRequest:
+  type: object
+  required: [organizationName, organizationEmail]
+  properties:
+    organizationName: { type: string }
+    organizationEmail: { type: string, format: email }
+    contactPhone: { type: string }
+    address: { type: string }
+    state: { type: string }
+    logoUrl: { type: string, format: uri }
+    contactName: { type: string }
+
+AgentApplication:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    user_id: { type: string, format: uuid }
+    full_name: { type: string }
+    email: { type: string }
+    phone: { type: string }
+    nin: { type: string }
+    state: { type: string }
+    lga: { type: string }
+    selfie_url: { type: string, format: uri, nullable: true }
+    nin_verification_status: { type: string, enum: [pending, verified, mismatch, failed] }
+    status: { type: string, enum: [pending, active, suspended, rejected] }
+    rejection_reason: { type: string, nullable: true }
+    created_at: { type: string, format: date-time }
+
+AgentDecisionRequest:
+  type: object
+  required: [decision]
+  properties:
+    decision: { type: string, enum: [approve, reject] }
+    rejectionReason: { type: string }
+
+UploadResponse:
+  type: object
+  properties:
+    kind: { type: string }
+    bucket: { type: string }
+    path: { type: string }
+    url: { type: string, format: uri }

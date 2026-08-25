@@ -1,0 +1,537 @@
+/admin/dashboard:
+  get:
+    tags: [Admin — Dashboard]
+    summary: Global platform statistics
+    responses:
+      '200': { description: Dashboard data, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/agent-applications:
+  get:
+    tags: [Admin — Agents]
+    summary: List field-agent applications
+    parameters:
+      - $ref: '#/components/parameters/StatusParam'
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200':
+        description: Page of applications
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/AgentApplication' } } }
+
+/admin/agent-applications/{applicationId}:
+  parameters:
+    - name: applicationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Admin — Agents]
+    summary: Get a single application (with KYC details)
+    responses:
+      '200': { description: Application, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/agent-applications/{applicationId}/decision:
+  parameters:
+    - name: applicationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Admin — Agents]
+    summary: Approve or reject a field-agent application
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AgentDecisionRequest' }
+    responses:
+      '200': { description: Decision recorded, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/agents:
+  get:
+    tags: [Admin — Agents]
+    summary: List all field agents
+    parameters:
+      - $ref: '#/components/parameters/StatusParam'
+      - $ref: '#/components/parameters/SearchParam'
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200': { description: Page of agents, content: { application/json: { schema: { $ref: '#/components/schemas/PaginatedEnvelope' } } } }
+
+/admin/agents/{agentId}:
+  parameters:
+    - name: agentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Admin — Agents]
+    summary: Get an agent profile with activity stats
+    responses:
+      '200': { description: Agent detail, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/agents/{agentId}/suspend:
+  parameters:
+    - name: agentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Admin — Agents]
+    summary: Suspend a field agent
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [reason]
+            properties: { reason: { type: string } }
+    responses:
+      '200': { description: Suspended, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/agents/{agentId}/reactivate:
+  parameters:
+    - name: agentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Admin — Agents]
+    summary: Reactivate a suspended agent
+    responses:
+      '200': { description: Reactivated, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/partners:
+  get:
+    tags: [Admin — Partners]
+    summary: List partner organizations
+    parameters:
+      - $ref: '#/components/parameters/StatusParam'
+      - $ref: '#/components/parameters/SearchParam'
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200':
+        description: Page of partners
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/Partner' } } }
+  post:
+    tags: [Admin — Partners]
+    summary: Create a partner organization (auto-generates the partner_admin login)
+    description: |
+      Creates the partner row, a Supabase auth user, and the `partner_admin`
+      role for the supplied organization email. A memorable strong password is
+      generated and emailed to the partner along with sign-in instructions.
+      The partner is forced to change the password on first login.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PartnerCreateRequest' }
+    responses:
+      '201':
+        description: Partner created and credentials emailed
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/SuccessEnvelope'
+                - properties:
+                    data:
+                      type: object
+                      properties:
+                        partner: { $ref: '#/components/schemas/Partner' }
+                        loginUserId: { type: string, format: uuid }
+
+/admin/partners/{partnerId}:
+  parameters:
+    - name: partnerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Admin — Partners]
+    summary: Get a partner with usage stats
+    responses:
+      '200': { description: Partner detail, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+  patch:
+    tags: [Admin — Partners]
+    summary: Update partner details
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PartnerCreateRequest' }
+    responses:
+      '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/partners/{partnerId}/suspend:
+  parameters:
+    - name: partnerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Admin — Partners]
+    summary: Suspend a partner organization
+    responses:
+      '200': { description: Suspended, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/partners/{partnerId}/reactivate:
+  parameters:
+    - name: partnerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Admin — Partners]
+    summary: Reactivate a suspended partner
+    responses:
+      '200': { description: Reactivated, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/partners/{partnerId}/reset-password:
+  parameters:
+    - name: partnerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Admin — Partners]
+    summary: Reset the partner_admin password (auto-generates and emails a new one)
+    responses:
+      '200': { description: Password reset, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/cooperatives:
+  get:
+    tags: [Admin — Cooperatives]
+    summary: List all cooperatives across all agents
+    parameters:
+      - { name: agentId, in: query, schema: { type: string, format: uuid } }
+      - $ref: '#/components/parameters/SearchParam'
+      - $ref: '#/components/parameters/StateParam'
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200': { description: Page, content: { application/json: { schema: { $ref: '#/components/schemas/PaginatedEnvelope' } } } }
+
+/admin/cooperatives/{cooperativeId}:
+  parameters:
+    - name: cooperativeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Admin — Cooperatives]
+    summary: Get a cooperative
+    responses:
+      '200': { description: Detail, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+  patch:
+    tags: [Admin — Cooperatives]
+    summary: Update a cooperative (admin override)
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CooperativeUpdateRequest' }
+    responses:
+      '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+  delete:
+    tags: [Admin — Cooperatives]
+    summary: Delete a cooperative
+    responses:
+      '200': { description: Deleted, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/farmers:
+  get:
+    tags: [Admin — Farmers]
+    summary: List all farmers
+    parameters:
+      - { name: cooperativeId, in: query, schema: { type: string, format: uuid } }
+      - { name: agentId, in: query, schema: { type: string, format: uuid } }
+      - $ref: '#/components/parameters/TierParam'
+      - $ref: '#/components/parameters/SearchParam'
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200': { description: Page, content: { application/json: { schema: { $ref: '#/components/schemas/PaginatedEnvelope' } } } }
+
+/admin/farmers/{farmerId}:
+  parameters:
+    - name: farmerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Admin — Farmers]
+    summary: Get a farmer
+    responses:
+      '200': { description: Detail, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+  patch:
+    tags: [Admin — Farmers]
+    summary: Update a farmer
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/FarmerUpdateRequest' }
+    responses:
+      '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+  delete:
+    tags: [Admin — Farmers]
+    summary: Delete a farmer
+    responses:
+      '200': { description: Deleted, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/financing-requests:
+  get:
+    tags: [Admin — Financing]
+    summary: List all financing requests
+    parameters:
+      - $ref: '#/components/parameters/StatusParam'
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200':
+        description: Page
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/FinancingRequest' } } }
+
+/admin/financing-requests/{requestId}:
+  parameters:
+    - name: requestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Admin — Financing]
+    summary: Get a financing request
+    responses:
+      '200': { description: Detail, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/financing-requests/{requestId}/decision:
+  parameters:
+    - name: requestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Admin — Financing]
+    summary: Decide on a financing request (approve, reject, disburse, or forward to a partner)
+    description: |
+      The admin can act in three ways:
+        - `approved` — keeps the loan in-house, optionally with an `approvedAmount` and `dueDate`.
+        - `approved` with `forwardToPartnerId` — forwards the request to the named partner, who is notified by email.
+        - `disbursed` — records the actual disbursement (use after approval).
+        - `rejected` — requires `rejectionReason`.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AdminFinancingDecisionRequest' }
+    responses:
+      '200': { description: Decision recorded, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/credit/farmers:
+  get:
+    tags: [Admin — Credit]
+    summary: List farmer credit scores
+    parameters:
+      - $ref: '#/components/parameters/TierParam'
+      - { name: cooperativeId, in: query, schema: { type: string, format: uuid } }
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200': { description: Page, content: { application/json: { schema: { $ref: '#/components/schemas/PaginatedEnvelope' } } } }
+
+/admin/credit/farmers/{farmerId}:
+  parameters:
+    - name: farmerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Admin — Credit]
+    summary: Get a farmer's current score plus history
+    responses:
+      '200': { description: Score + history, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/credit/farmers/{farmerId}/recalculate:
+  parameters:
+    - name: farmerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Admin — Credit]
+    summary: Force-recalculate a farmer's score
+    responses:
+      '200': { description: Recalculated, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/credit/farmers/{farmerId}/report:
+  parameters:
+    - name: farmerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Admin — Credit]
+    summary: Generate a full credit report for one farmer
+    responses:
+      '200': { description: Report, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/credit/cooperatives:
+  get:
+    tags: [Admin — Credit]
+    summary: List cooperative credit scores
+    parameters:
+      - $ref: '#/components/parameters/TierParam'
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200': { description: Page, content: { application/json: { schema: { $ref: '#/components/schemas/PaginatedEnvelope' } } } }
+
+/admin/credit/cooperatives/{cooperativeId}:
+  parameters:
+    - name: cooperativeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Admin — Credit]
+    summary: Get a cooperative score with members
+    responses:
+      '200': { description: Score, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/credit/cooperatives/{cooperativeId}/recalculate:
+  parameters:
+    - name: cooperativeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Admin — Credit]
+    summary: Recalculate a cooperative's aggregate score
+    responses:
+      '200': { description: Recalculated, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/credit/cooperatives/{cooperativeId}/report:
+  parameters:
+    - name: cooperativeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  get:
+    tags: [Admin — Credit]
+    summary: Generate a full credit report for a cooperative
+    responses:
+      '200': { description: Report, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/benchmarks:
+  get:
+    tags: [Admin — Benchmarks]
+    summary: List regional yield benchmarks
+    parameters:
+      - $ref: '#/components/parameters/CropParam'
+      - $ref: '#/components/parameters/StateParam'
+      - $ref: '#/components/parameters/LgaParam'
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200': { description: Page, content: { application/json: { schema: { $ref: '#/components/schemas/PaginatedEnvelope' } } } }
+  post:
+    tags: [Admin — Benchmarks]
+    summary: Upsert a benchmark (crop × state × lga? × season?)
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [crop, state, benchmarkYieldTonnesPerHectare]
+            properties:
+              crop: { type: string }
+              state: { type: string }
+              lga: { type: string }
+              season: { type: string }
+              benchmarkYieldTonnesPerHectare: { type: number }
+              source: { type: string }
+    responses:
+      '201': { description: Upserted, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/wallets:
+  get:
+    tags: [Admin — Wallets]
+    summary: List all agent wallets ranked by balance
+    parameters:
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200': { description: Page, content: { application/json: { schema: { $ref: '#/components/schemas/PaginatedEnvelope' } } } }
+
+/admin/settlements:
+  get:
+    tags: [Admin — Wallets]
+    summary: List settlement requests
+    parameters:
+      - $ref: '#/components/parameters/StatusParam'
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200':
+        description: Page of settlements
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PaginatedEnvelope'
+                - properties: { data: { type: array, items: { $ref: '#/components/schemas/SettlementRequest' } } }
+
+/admin/settlements/{settlementId}/decision:
+  parameters:
+    - name: settlementId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  post:
+    tags: [Admin — Wallets]
+    summary: Approve or reject a settlement request
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [decision]
+            properties:
+              decision: { type: string, enum: [approve, reject] }
+              adminNotes: { type: string }
+    responses:
+      '200': { description: Decision recorded, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
+
+/admin/activity-logs:
+  get:
+    tags: [Admin — Activity]
+    summary: List system activity log entries
+    parameters:
+      - { name: actorId, in: query, schema: { type: string, format: uuid } }
+      - { name: action, in: query, schema: { type: string } }
+      - { name: entityType, in: query, schema: { type: string } }
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
+    responses:
+      '200': { description: Page, content: { application/json: { schema: { $ref: '#/components/schemas/PaginatedEnvelope' } } } }

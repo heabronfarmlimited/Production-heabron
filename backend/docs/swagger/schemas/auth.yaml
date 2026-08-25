@@ -1,0 +1,89 @@
+SignupStep1Request:
+  type: object
+  required: [email, password]
+  properties:
+    email: { type: string, format: email, example: agent@example.com }
+    password: { type: string, minLength: 6, example: "Str0ngP@ss!" }
+
+VerifyOtpRequest:
+  type: object
+  required: [email, code, purpose]
+  properties:
+    email: { type: string, format: email }
+    code: { type: string, pattern: '^\d{6}$', example: '482917' }
+    purpose: { type: string, enum: [signup, password_reset] }
+
+ResendOtpRequest:
+  type: object
+  required: [email, purpose]
+  properties:
+    email: { type: string, format: email }
+    purpose: { type: string, enum: [signup, password_reset] }
+
+SignupCompleteRequest:
+  type: object
+  required: [fullName, phone, nin, dateOfBirth, state, lga]
+  properties:
+    fullName: { type: string, example: Gregory Chukwunonso Christian }
+    phone: { type: string, example: "+2348012345678" }
+    nin: { type: string, pattern: '^\d{11}$', example: '12345678901' }
+    dateOfBirth: { type: string, format: date, example: '1995-03-12' }
+    state: { type: string, example: Oyo }
+    lga: { type: string, example: Akinyele }
+    selfieUrl: { type: string, format: uri, nullable: true }
+
+LoginRequest:
+  type: object
+  required: [email, password]
+  properties:
+    email: { type: string, format: email }
+    password: { type: string }
+
+LoginResponse:
+  type: object
+  properties:
+    accessToken: { type: string }
+    refreshToken: { type: string }
+    user: { $ref: '#/components/schemas/UserPublic' }
+    partner: { $ref: '#/components/schemas/Partner', nullable: true }
+
+RefreshRequest:
+  type: object
+  required: [refreshToken]
+  properties:
+    refreshToken: { type: string }
+
+ForgotPasswordRequest:
+  type: object
+  required: [email]
+  properties:
+    email: { type: string, format: email }
+
+ResetPasswordRequest:
+  type: object
+  required: [email, code, newPassword]
+  properties:
+    email: { type: string, format: email }
+    code: { type: string, pattern: '^\d{6}$' }
+    newPassword: { type: string, minLength: 6 }
+
+ChangePasswordRequest:
+  type: object
+  required: [currentPassword, newPassword]
+  properties:
+    currentPassword: { type: string }
+    newPassword: { type: string, minLength: 6 }
+
+UserPublic:
+  type: object
+  properties:
+    id: { type: string, format: uuid }
+    email: { type: string, format: email }
+    fullName: { type: string }
+    role:
+      type: string
+      enum: [super_admin, ops_admin, finance_admin, field_agent, partner_admin, partner_analyst]
+    partnerId: { type: string, format: uuid, nullable: true }
+    status: { type: string, enum: [pending, active, suspended, rejected] }
+    mustChangePassword: { type: boolean }
+    avatarUrl: { type: string, format: uri, nullable: true }

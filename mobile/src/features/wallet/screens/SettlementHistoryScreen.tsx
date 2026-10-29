@@ -55,7 +55,6 @@ export function SettlementHistoryScreen() {
         <FlashList
           data={items}
           keyExtractor={(item, index) => item.id ?? `settlement-${index}`}
-          estimatedItemSize={r(96)}
           renderItem={({ item }) => <SettlementItem item={item} />}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           onEndReached={loadMore}

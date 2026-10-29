@@ -25,7 +25,7 @@ let screen: ScaledSize = Dimensions.get('window');
  * Call `subscribeToDimensions()` once at app start.
  */
 export function subscribeToDimensions(): () => void {
-  const sub = Dimensions.addEventListener('change', ({ window }) => {
+  const sub = Dimensions.addEventListener('change', ({ window }: { window: ScaledSize }) => {
     screen = window;
   });
   return () => sub.remove();

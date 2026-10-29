@@ -20,7 +20,7 @@
  *  - The template was an inline Dart string; `GET /agent/imports/template` is
  *    fetched, with the bundled copy as an offline fallback.
  */
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 

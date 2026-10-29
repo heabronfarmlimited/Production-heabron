@@ -159,7 +159,7 @@ const styles = StyleSheet.create({
     paddingBottom: r(24),
   },
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     // Dart: Colors.white.withValues(alpha: .4)
     backgroundColor: 'rgba(255, 255, 255, 0.4)',
     alignItems: 'center',

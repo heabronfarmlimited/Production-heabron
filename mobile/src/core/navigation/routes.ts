@@ -22,7 +22,7 @@
  *   'verify-forgot-password-otp-view' -> /forgot-password/verify
  *   'reset_password_view'             -> /forgot-password/reset
  *   '/homeScreen'                     -> /(tabs)
- *   'dashboard-view'                  -> /(tabs)/
+ *   'dashboard-view'                  -> /(tabs)
  *   'recent-activity-logs-view'       -> /activity-logs
  *   '/requestSettlement'              -> /wallet/settlement/request
  *   '/transactionHistory'             -> /wallet/transactions
@@ -33,6 +33,11 @@
  *   '/bankAccountSettings'            -> /profile/bank-account
  *   '/notifications'                  -> /notifications
  */
+
+import type { Href } from 'expo-router';
+
+/** Dynamic paths are built from runtime ids, so they cannot be statically typed. */
+const href = (path: string): Href => path as Href;
 
 export const routes = {
   // ---------------------------------------------------------------- startup
@@ -53,7 +58,7 @@ export const routes = {
 
   // -------------------------------------------------------------- tab shell
   home: '/(tabs)',
-  dashboard: '/(tabs)/',
+  dashboard: '/(tabs)',
   cooperativesTab: '/(tabs)/cooperatives',
   farmersTab: '/(tabs)/farmers',
   activitiesTab: '/(tabs)/activities',
@@ -64,44 +69,44 @@ export const routes = {
 
   // ----------------------------------------------------------- cooperatives
   cooperativeCreate: '/cooperatives/create',
-  cooperativeDetails: (id: string) => `/cooperatives/${id}`,
-  cooperativeEdit: (id: string) => `/cooperatives/${id}/edit`,
+  cooperativeDetails: (id: string) => href(`/cooperatives/${id}`),
+  cooperativeEdit: (id: string) => href(`/cooperatives/${id}/edit`),
   financingRequest: (cooperativeId: string) =>
-    `/cooperatives/${cooperativeId}/financing/request`,
+    href(`/cooperatives/${cooperativeId}/financing/request`),
   financingHistory: (cooperativeId: string) =>
-    `/cooperatives/${cooperativeId}/financing`,
-  financingDetails: (id: string) => `/financing/${id}`,
+    href(`/cooperatives/${cooperativeId}/financing`),
+  financingDetails: (id: string) => href(`/financing/${id}`),
 
   // ---------------------------------------------------------------- farmers
   farmerAdd: '/farmers/add',
   farmerBulkUpload: '/farmers/bulk-upload',
-  farmerDetails: (id: string) => `/farmers/${id}`,
-  farmerEdit: (id: string) => `/farmers/${id}/edit`,
-  farmerRecordYields: (id: string) => `/farmers/${id}/yields/record`,
-  farmerProductionYields: (id: string) => `/farmers/${id}/yields`,
-  productionYieldDetails: (id: string) => `/productions/${id}`,
-  farmerMarketAccess: (id: string) => `/farmers/${id}/market-access`,
-  farmerMarketAccessAdd: (id: string) => `/farmers/${id}/market-access/add`,
-  farmerFieldNotes: (id: string) => `/farmers/${id}/field-notes`,
-  farmerFieldNoteAdd: (id: string) => `/farmers/${id}/field-notes/add`,
+  farmerDetails: (id: string) => href(`/farmers/${id}`),
+  farmerEdit: (id: string) => href(`/farmers/${id}/edit`),
+  farmerRecordYields: (id: string) => href(`/farmers/${id}/yields/record`),
+  farmerProductionYields: (id: string) => href(`/farmers/${id}/yields`),
+  productionYieldDetails: (id: string) => href(`/productions/${id}`),
+  farmerMarketAccess: (id: string) => href(`/farmers/${id}/market-access`),
+  farmerMarketAccessAdd: (id: string) => href(`/farmers/${id}/market-access/add`),
+  farmerFieldNotes: (id: string) => href(`/farmers/${id}/field-notes`),
+  farmerFieldNoteAdd: (id: string) => href(`/farmers/${id}/field-notes/add`),
   /**
    * Record a repayment. Keyed by **farmer**, not financing request: the Dart
    * route `'recordRepayment'` took a `Farmer` argument and the screen loads
    * that farmer's active financing requests into a dropdown, so the specific
    * request is chosen on-screen rather than carried in the path.
    */
-  recordRepayment: (farmerId: string) => `/farmers/${farmerId}/repayment`,
+  recordRepayment: (farmerId: string) => href(`/farmers/${farmerId}/repayment`),
   /**
    * Farm boundary capture — new. `mapFarm()` existed in the Dart repository
    * layer with no screen, so there is no Dart route to port.
    */
-  farmerBoundary: (id: string) => `/farmers/${id}/boundary`,
+  farmerBoundary: (id: string) => href(`/farmers/${id}/boundary`),
 
   // ----------------------------------------------------------------- wallet
   settlementRequest: '/wallet/settlement/request',
   settlementHistory: '/wallet/settlement/history',
   transactionHistory: '/wallet/transactions',
-  transactionDetails: (id: string) => `/wallet/transactions/${id}`,
+  transactionDetails: (id: string) => href(`/wallet/transactions/${id}`),
 
   // ---------------------------------------------------------------- profile
   profile: '/profile',

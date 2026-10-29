@@ -173,7 +173,6 @@ export function ActivitiesScreen() {
         <FlashList
           data={rows}
           keyExtractor={(row) => `${row.kind}-${row.key}`}
-          estimatedItemSize={r(92)}
           getItemType={(row) => row.kind}
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) => <ActivityCardFor activity={item} />}

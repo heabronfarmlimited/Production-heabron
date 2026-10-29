@@ -245,7 +245,7 @@ const styles = StyleSheet.create({
     marginTop: r(4),
   },
   backdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.35)',
   },
   sheet: {

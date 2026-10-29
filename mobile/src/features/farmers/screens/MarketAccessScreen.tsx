@@ -74,7 +74,6 @@ export function MarketAccessScreen(props: MarketAccessScreenProps = {}) {
         <FlashList
           data={records}
           keyExtractor={(item) => item.id}
-          estimatedItemSize={160}
           ItemSeparatorComponent={() => <View style={{ height: h(12) }} />}
           renderItem={({ item }) => (
             <MarketAccessCard

@@ -281,7 +281,6 @@ export function CooperativeDetailsScreen({ id }: CooperativeDetailsScreenProps) 
       <FlashList
         data={farmers}
         keyExtractor={(item: Farmer) => item.id}
-        estimatedItemSize={r(62)}
         ListHeaderComponent={header}
         renderItem={({ item }: { item: Farmer }) => (
           <FarmerScoreTile

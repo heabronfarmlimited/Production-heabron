@@ -9,13 +9,13 @@
  * kept them in the same plaintext Hive box as cached lists — fine for cached
  * dashboards, not for credentials.
  */
-import { MMKV } from 'react-native-mmkv';
+import { createMMKV, type MMKV } from 'react-native-mmkv';
 
 /** `heabronStorageBox` — note the Dart constant had a trailing space. */
 const STORAGE_ID = 'heabronStorageBox';
 
 /** General cache: dashboard snapshots, cooperative lists, pending farmers. */
-const cache = new MMKV({ id: STORAGE_ID });
+const cache = createMMKV({ id: STORAGE_ID });
 
 /**
  * Credentials. `encryptionKey` turns on MMKV's AES layer; the key itself is
@@ -23,7 +23,7 @@ const cache = new MMKV({ id: STORAGE_ID });
  * better than the plaintext Hive box this replaces. For a hardware-backed
  * option, move `tokenKey`/`refreshTokenKey` to expo-secure-store.
  */
-const secure = new MMKV({
+const secure = createMMKV({
   id: `${STORAGE_ID}.secure`,
   encryptionKey: 'heabron-secure-v1',
 });
@@ -80,7 +80,7 @@ export function writeJson(key: string, value: unknown): void {
 
 /** `LocalStorageService.delete` */
 export function remove(key: string): void {
-  instanceFor(key).delete(key);
+  instanceFor(key).remove(key);
 }
 
 /** `LocalStorageService.clearDb` — clears both instances on logout. */

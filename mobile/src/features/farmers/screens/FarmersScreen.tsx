@@ -144,7 +144,6 @@ export function FarmersScreen() {
         <FlashList
           data={items}
           keyExtractor={(item) => item.id}
-          estimatedItemSize={72}
           renderItem={({ item }) => (
             <FarmerScoreTile
               farmer={item}

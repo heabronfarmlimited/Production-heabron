@@ -10,9 +10,7 @@
  * of six separate inputs.
  */
 import { useEffect, useRef, useState } from 'react';
-import type {
-  NativeSyntheticEvent,
-  TextInputKeyPressEventData} from 'react-native';
+import type { TextInputInstance, TextInputKeyPressEvent } from 'react-native';
 import {
   Platform,
   Pressable,
@@ -52,7 +50,7 @@ export function AppPinCodeField({
   autoFocus = true,
   testID,
 }: AppPinCodeFieldProps) {
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<TextInputInstance>(null);
   const [focused, setFocused] = useState(false);
   const completedFor = useRef<string | null>(null);
 
@@ -71,7 +69,7 @@ export function AppPinCodeField({
   };
 
   // Android sometimes swallows backspace on an empty input.
-  const handleKeyPress = (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
+  const handleKeyPress = (e: TextInputKeyPressEvent) => {
     if (e.nativeEvent.key === 'Backspace' && value.length > 0) {
       onChangeText(value.slice(0, -1));
     }

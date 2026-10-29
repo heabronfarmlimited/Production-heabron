@@ -13,7 +13,7 @@
  *    it is byte-identical to what the endpoint returns.
  */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { useState } from 'react';
 

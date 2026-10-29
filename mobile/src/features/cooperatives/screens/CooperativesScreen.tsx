@@ -99,7 +99,6 @@ export function CooperativesScreen() {
         <FlashList
           data={items}
           keyExtractor={(item: Cooperative) => item.id}
-          estimatedItemSize={r(75)}
           renderItem={({ item }: { item: Cooperative }) => (
             <CooperativeListItem
               name={titleCase(item.name)}

@@ -39,11 +39,10 @@ All three must be clean. They are, as of the last commit.
 
 | | |
 |---|---|
-| Node | 20 LTS or newer |
-| Expo SDK | 52 |
-| React Native | 0.76 |
-| Xcode | 15+ (iOS) |
-| Android SDK | API 34, min 21 |
+| Node | 22.13 or newer (22 LTS / 24) — required by React Native 0.88 |
+| Expo SDK | 58 |
+| React Native | 0.88 (React 19.3, New Architecture only) |
+| Xcode / Android SDK | see the Expo SDK 58 requirements, only needed for local native builds (`expo run:*`) |
 
 Android and iOS only — the Flutter app dropped web and Windows, and so does this.
 

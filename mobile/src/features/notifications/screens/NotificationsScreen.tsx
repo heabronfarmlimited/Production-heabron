@@ -173,7 +173,6 @@ export function NotificationsScreen() {
         <FlashList
           data={rows}
           keyExtractor={(row) => row.key}
-          estimatedItemSize={r(84)}
           getItemType={(row) => row.kind}
           contentContainerStyle={styles.listContent}
           renderItem={({ item: row }) => {

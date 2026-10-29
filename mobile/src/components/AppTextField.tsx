@@ -12,10 +12,9 @@ import type { ReactNode} from 'react';
 import { useState } from 'react';
 import type {
   KeyboardTypeOptions,
-  NativeSyntheticEvent,
   ReturnKeyTypeOptions,
   StyleProp,
-  TextInputFocusEventData,
+  TextInputFocusEvent,
   TextStyle,
   ViewStyle} from 'react-native';
 import {
@@ -46,7 +45,7 @@ export interface AppTextFieldProps {
   hintText?: string;
   value?: string;
   onChangeText?: (text: string) => void;
-  onBlur?: (e: NativeSyntheticEvent<TextInputFocusEventData>) => void;
+  onBlur?: (e: TextInputFocusEvent) => void;
   /** Validation message; renders in red below the field. */
   error?: string;
   enabled?: boolean;

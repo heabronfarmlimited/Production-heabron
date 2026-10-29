@@ -60,7 +60,6 @@ export function TransactionHistoryScreen() {
         <FlashList
           data={items}
           keyExtractor={(item, index) => item.id ?? `tx-${index}`}
-          estimatedItemSize={r(92)}
           renderItem={({ item }) => (
             <TransactionRow
               transaction={item}

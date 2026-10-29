@@ -102,7 +102,6 @@ export function RecentActivityLogsScreen() {
         <FlashList
           data={filtered}
           keyExtractor={(item, index) => item.id || `log-${index}`}
-          estimatedItemSize={r(70)}
           renderItem={({ item }) => (
             <ActivityLogItem
               title={titleCase(item.action)}

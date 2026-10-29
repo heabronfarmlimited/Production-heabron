@@ -16,13 +16,6 @@ const config: ExpoConfig = {
   icon: './src/assets/images/app_icon.png',
   scheme: 'heabron',
   userInterfaceStyle: 'light', // the app ships a light theme only
-  newArchEnabled: true,
-
-  splash: {
-    image: './src/assets/images/splash_image.png',
-    resizeMode: 'cover',
-    backgroundColor: '#FFFFFF',
-  },
 
   assetBundlePatterns: ['**/*'],
 
@@ -60,6 +53,14 @@ const config: ExpoConfig = {
 
   plugins: [
     'expo-router',
+    [
+      'expo-splash-screen',
+      {
+        image: './src/assets/images/splash_image.png',
+        resizeMode: 'cover',
+        backgroundColor: '#FFFFFF',
+      },
+    ],
     [
       'expo-font',
       {

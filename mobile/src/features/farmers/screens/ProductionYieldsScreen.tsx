@@ -62,7 +62,6 @@ export function ProductionYieldsScreen(props: ProductionYieldsScreenProps = {}) 
       <FlashList
         data={items}
         keyExtractor={(item) => item.id}
-        estimatedItemSize={96}
         ItemSeparatorComponent={() => <View style={{ height: h(12) }} />}
         renderItem={({ item }) => (
           <ProductionYieldCard

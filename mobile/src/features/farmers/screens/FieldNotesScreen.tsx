@@ -68,7 +68,6 @@ export function FieldNotesScreen(props: FieldNotesScreenProps = {}) {
         <FlashList
           data={notes}
           keyExtractor={(item) => item.id}
-          estimatedItemSize={170}
           ItemSeparatorComponent={() => <View style={{ height: h(12) }} />}
           renderItem={({ item }) => (
             <FieldNoteCard

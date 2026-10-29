@@ -92,7 +92,6 @@ export function FinancingHistoryScreen({
         <FlashList
           data={items}
           keyExtractor={(item: FinancingHistoryItem) => item.id}
-          estimatedItemSize={r(84)}
           contentContainerStyle={styles.listContent}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           renderItem={({ item }: { item: FinancingHistoryItem }) => (

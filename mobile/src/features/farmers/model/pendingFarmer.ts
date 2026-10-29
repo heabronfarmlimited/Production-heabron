@@ -66,13 +66,13 @@ export const pendingFarmerName = (p: PendingFarmer): string =>
 
 // ------------------------------------------------------------- persistence
 /**
- * MMKV-backed store, replacing `FarmersLocalRepository` (Hive).
+ * Device-storage-backed store, replacing `FarmersLocalRepository` (Hive).
  * `storage.readJson` already drops corrupt entries rather than throwing.
  */
 /**
  * Listeners are module-level so every mounted `useOfflineFarmerQueue` — the one
  * in `app/_layout`, the banner on the farmers list, the Add Farmer form —
- * reflects a write immediately. MMKV has no change notification of its own, so
+ * reflects a write immediately. The storage layer has no change notification of its own, so
  * without this a queued farmer would stay invisible until the next remount.
  */
 type QueueListener = (queue: PendingFarmer[]) => void;

@@ -76,7 +76,7 @@ src/
     config/               env
     hooks/                usePaginatedList, useMediaPicker, useLocation
     navigation/           routes
-    storage/              MMKV wrappers, token/session storage
+    storage/              SQLite KV + SecureStore wrappers, token/session storage
     theme/                colors, typography, responsive, assets
     utils/                format, toast
   components/             shared widgets (the lib/src/shared equivalents)
@@ -91,7 +91,7 @@ src/
 |---|---|---|
 | `hooks_riverpod` + `ChangeNotifier` | TanStack Query + Zustand | Server state needs caching, retry and pagination; session state needs one reactive source. The Dart controllers hand-rolled all of it per screen. |
 | Dio + `NetworkInterceptor` | axios + interceptors | Same contract: bearer token per request, single-flight 401 refresh, retry once. |
-| Hive | MMKV | Synchronous, native-backed. Tokens live in a separate encrypted instance. |
+| Hive | expo-sqlite/kv-store + expo-secure-store | Synchronous, works in Expo Go. Tokens live in the Keychain/Keystore via SecureStore. |
 | `get_it` service locator | plain module imports | DI by import; no registry to keep in sync. |
 | named routes + a 300-line `switch` | expo-router | File-based, typed, deep-linkable. |
 | `flutter_screenutil` | `core/theme/responsive.ts` | Same 383×852 design size; `.w/.h/.r/.sp/.spMin` → `w()/h()/r()/sp()/spMin()`. |
@@ -192,7 +192,7 @@ Buckets: `avatar`, `selfie`, `farmer_id`, `farmer_photo`, `farm_photo`,
 
 ## Offline onboarding
 
-A farmer onboarded without a connection is queued in MMKV with the local URIs
+A farmer onboarded without a connection is queued in local storage with the local URIs
 of its image fields. `useOfflineFarmerQueue` attaches a NetInfo listener in the
 root layout and drains the queue on every offline → online transition,
 uploading the files then POSTing each farmer.

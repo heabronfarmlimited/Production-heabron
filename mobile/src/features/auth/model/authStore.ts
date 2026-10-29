@@ -4,7 +4,7 @@
  *
  * The Dart app re-read the cached user from Hive in each screen through a
  * `KeyValueStorageListener`. A single store is clearer and gives every screen
- * the same reactive value, while still persisting to MMKV so a cold start can
+ * the same reactive value, while still persisting to device storage so a cold start can
  * restore the session synchronously (which the splash screen depends on).
  */
 import { create } from 'zustand';
@@ -30,7 +30,7 @@ interface AuthState {
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
-  // Read synchronously at module init — MMKV is sync, so the splash screen can
+  // Read synchronously at module init — storage reads are sync, so the splash screen can
   // decide its route on the first frame without an async gate.
   user: authStorage.getCachedUser() ?? null,
   hydrated: true,

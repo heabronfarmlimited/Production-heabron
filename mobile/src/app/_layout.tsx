@@ -7,7 +7,7 @@
  * `ScreenUtilInit`, set the theme and `onGenerateRoute`, and started at
  * `SplashView.route`.
  *
- * Here: MMKV needs no init, DI is plain imports, orientation is locked in
+ * Here: storage needs no init, DI is plain imports, orientation is locked in
  * app.config.ts, and routing is file-based. What remains is the provider tree,
  * fonts, the toast host, and the responsive-dimension subscription.
  */

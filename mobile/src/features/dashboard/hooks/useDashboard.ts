@@ -4,7 +4,7 @@
  * The Dart version fired an un-awaited fetch in the controller constructor,
  * wrote the result into Hive, and rendered from a `ValueListenableBuilder` on
  * that box — so the screen read cache while the network write happened
- * out of band. The query cache does both jobs, and MMKV still backs it so a
+ * out of band. The query cache does both jobs, and local storage still backs it so a
  * cold start shows the last known numbers before the refetch lands.
  */
 import { useQuery } from '@tanstack/react-query';

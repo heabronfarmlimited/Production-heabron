@@ -60,7 +60,7 @@ export interface OfflineFarmerQueue {
   isSyncing: boolean;
   /** Uploads the queued images, POSTs each farmer, drops it on success. */
   syncAll: () => Promise<void>;
-  /** Re-reads MMKV — call after enqueueing from a form. */
+  /** Re-reads local storage — call after enqueueing from a form. */
   reload: () => void;
   /** Drops one entry without sending it. */
   discard: (id: string) => void;
@@ -79,7 +79,7 @@ export function useOfflineFarmerQueue(): OfflineFarmerQueue {
 
   // Stay in step with every other mounted copy of this hook — the one in
   // `app/_layout`, the farmers-list banner and the Add Farmer form all share
-  // one MMKV queue.
+  // one local-storage queue.
   useEffect(() => pendingFarmerStore.subscribe(setPending), []);
 
   const reload = useCallback(() => {

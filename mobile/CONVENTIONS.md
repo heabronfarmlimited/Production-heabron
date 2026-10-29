@@ -12,7 +12,7 @@ patterns.
 | Server state | TanStack Query | `ChangeNotifier` + Hive-as-view-model |
 | Session state | Zustand (`useAuthStore`) | `UserListener` + `AuthLocalRepository` |
 | Forms | React Hook Form + Zod | `GlobalKey<FormState>` + `form_builder_validators` |
-| Storage | MMKV | Hive |
+| Storage | expo-sqlite/kv-store + expo-secure-store | Hive |
 | HTTP | axios (`src/core/api/client.ts`) | Dio + `NetworkInterceptor` |
 | Styling | `StyleSheet` + theme tokens | `ThemeData` + `flutter_screenutil` |
 | Lists | FlashList | `ListView.builder` / Slivers |

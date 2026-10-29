@@ -9,7 +9,10 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Modal } from '@/components/ui/Modal';
 import { Field, Input, Select, Textarea } from '@/components/ui/Input';
 import { ImageUpload } from '@/components/ui/ImageUpload';
-import { formatNaira, formatDate, relativeTime } from '@/lib/utils';
+import { formatNaira, formatDate, formatScore, humanize, relativeTime } from '@/lib/utils';
+
+// createFinancingRequest.season: wet | dry | all_year.
+const SEASON_LABELS = { wet: 'Wet', dry: 'Dry', all_year: 'All Year' };
 import toast from 'react-hot-toast';
 
 export default function FinancingDetailPage() {
@@ -18,19 +21,41 @@ export default function FinancingDetailPage() {
   const [modal, setModal] = useState(null); // 'approve' | 'reject' | 'disburse' | 'forward'
   const qc = useQueryClient();
 
-  const { data: req, isLoading } = useQuery({
+  const { data: req, isLoading, isError, error } = useQuery({
     queryKey: ['admin-financing', requestId],
     queryFn: () => api.get(`/admin/financing-requests/${requestId}`),
   });
 
   if (isLoading) return <Skeleton className="h-64" />;
-  if (!req) return <Card><p className="py-12 text-center">Request not found</p></Card>;
+  // FIXED — a failed request and a missing request looked identical.
+  if (isError) {
+    return (
+      <Card padded>
+        <p className="py-10 text-center text-red-700">
+          Could not load this request{error?.message ? `: ${error.message}` : ''}.
+        </p>
+        <div className="flex justify-center">
+          <Button variant="secondary" onClick={() => navigate('/admin/financing')}>Back to financing</Button>
+        </div>
+      </Card>
+    );
+  }
+  if (!req) {
+    return (
+      <Card padded>
+        <p className="py-10 text-center">This financing request no longer exists.</p>
+        <div className="flex justify-center">
+          <Button variant="secondary" onClick={() => navigate('/admin/financing')}>Back to financing</Button>
+        </div>
+      </Card>
+    );
+  }
 
   const coop = req.cooperatives;
 
   return (
     <>
-      <button onClick={() => navigate(-1)} className="mb-4 inline-flex items-center gap-2 text-sm text-smoke hover:text-ink">
+      <button type="button" onClick={() => navigate(-1)} className="mb-4 inline-flex items-center gap-2 text-sm text-smoke hover:text-ink">
         <ArrowLeft className="size-4" /> Back
       </button>
 
@@ -51,12 +76,13 @@ export default function FinancingDetailPage() {
         <Card>
           <p className="eyebrow mb-1">Purpose</p>
           <p className="font-medium">{req.purpose}</p>
-          <p className="text-xs text-smoke mt-1 capitalize">{req.season} season · {req.repayment_window_days} day window</p>
+          {/* FIXED — printed the raw enum, e.g. "all_year season". */}
+          <p className="text-xs text-smoke mt-1">{SEASON_LABELS[req.season] || humanize(req.season) || 'Season n/a'} · {req.repayment_window_days ?? '—'} day window</p>
         </Card>
         <Card>
           <p className="eyebrow mb-1">Borrower tier</p>
           <TierPill tier={coop?.cooperative_tier} />
-          {coop?.average_credit_score != null && <p className="text-xs text-smoke mt-1">Avg score {coop.average_credit_score}</p>}
+          {coop?.average_credit_score != null && <p className="text-xs text-smoke mt-1">Avg score {formatScore(coop.average_credit_score)}</p>}
         </Card>
       </div>
 
@@ -108,8 +134,8 @@ export default function FinancingDetailPage() {
           <KV label="Cooperative" value={coop?.name} />
           <KV label="Cooperative state" value={coop?.state} />
           <KV label="Due date" value={formatDate(req.due_date)} />
-          <KV label="Forwarded to" value={req.forwarded_to_partner_id ? 'Partner' : '—'} />
-          <KV label="Partner decision" value={req.partner_decision || '—'} />
+          <KV label="Forwarded to partner" value={req.forwarded_to_partner_id ? 'Yes' : 'No'} />
+          <KV label="Partner decision" value={humanize(req.partner_decision) || 'Awaiting'} />
           <KV label="Disbursed" value={req.disbursed_at ? formatDate(req.disbursed_at) : '—'} />
           {req.rejection_reason && <KV label="Rejection reason" value={req.rejection_reason} />}
           {req.admin_comments && <KV label="Admin notes" value={req.admin_comments} />}
@@ -121,7 +147,7 @@ export default function FinancingDetailPage() {
       <Card padded>
         <p className="eyebrow mb-1">Repayments</p>
         <h3 className="font-display text-xl font-semibold mb-4">Repayment history</h3>
-        {(req.repayment_records || []).length === 0 ? (
+        {!Array.isArray(req.repayment_records) || req.repayment_records.length === 0 ? (
           <p className="text-sm text-smoke py-6 text-center">No repayments recorded yet.</p>
         ) : (
           <div className="overflow-x-auto">
@@ -180,37 +206,64 @@ function DecisionModal({ open, kind, request, onClose, onDone }) {
   const [disbursementReference, setDisbursementReference] = useState('');
   const [proofUrls, setProofUrls] = useState([]);
 
+  // FIXED — api.raw bypass replaced with the list helper. pageSize is capped at
+  // 100 by the validator, so 100 is the maximum that can be requested here.
   const { data: partners } = useQuery({
     queryKey: ['admin-partners-active'],
-    queryFn: () => api.raw.get('/admin/partners', { params: { status: 'active', pageSize: 100 } }).then((r) => r.data?.data || []),
+    queryFn: () => api.list('/admin/partners', { params: { status: 'active', pageSize: 100 } }),
     enabled: kind === 'forward',
   });
+  const partnerOptions = partners?.data || [];
 
   const mutate = useMutation({
     mutationFn: (body) => api.post(`/admin/financing-requests/${request.id}/decision`, body),
     onSuccess: () => { toast.success('Decision recorded'); onDone(); },
+    // Surface per-field validation detail from the envelope rather than only
+    // the generic "Validation failed".
+    onError: (e) => {
+      const detail = e?.details?.[0];
+      if (detail) toast.error(`${detail.field}: ${detail.message}`);
+    },
   });
 
+  // FIXED — CRITICAL. The decision enum was built from the modal `kind`, so
+  // "approve" and "reject" were posted verbatim. The admin validator only
+  // accepts 'approved' | 'rejected' | 'disbursed', so every in-house approval
+  // and every rejection from this page 422'd ("Validation failed"). Mapped
+  // explicitly so a new modal kind can't silently reintroduce it.
+  const DECISION_BY_KIND = { approve: 'approved', forward: 'approved', disburse: 'disbursed', reject: 'rejected' };
+
   function submit() {
-    const body = { decision: kind === 'forward' ? 'approved' : kind === 'disburse' ? 'disbursed' : kind, adminComments };
+    const decision = DECISION_BY_KIND[kind];
+    if (!decision) return;
+    const body = { decision };
+    // Keep optional strings out of the body entirely rather than sending ''.
+    if (adminComments.trim()) body.adminComments = adminComments.trim();
     if (kind === 'approve' || kind === 'forward' || kind === 'disburse') {
-      if (approvedAmount) body.approvedAmount = Number(approvedAmount);
+      // approvedAmount must be a positive number when present.
+      const amount = Number(approvedAmount);
+      if (Number.isFinite(amount) && amount > 0) body.approvedAmount = amount;
       if (dueDate) body.dueDate = dueDate;
     }
     if (kind === 'forward') body.forwardToPartnerId = partnerId;
-    if (kind === 'reject') body.rejectionReason = rejectionReason;
+    if (kind === 'reject') body.rejectionReason = rejectionReason.trim();
     // Recipient account can be attached when approving/forwarding or disbursing.
     if (accountDetails && (kind === 'approve' || kind === 'forward' || kind === 'disburse')) {
       body.disbursementAccountDetails = accountDetails;
     }
     if (kind === 'disburse') {
-      if (disbursementReference) body.disbursementReference = disbursementReference;
+      if (disbursementReference.trim()) body.disbursementReference = disbursementReference.trim();
       if (proofUrls.length) body.disbursementProofUrls = proofUrls;
     }
     mutate.mutate(body);
   }
 
   if (!open) return null;
+  // FIXED — Confirm was always enabled: forwarding with no partner selected
+  // and rejecting with no reason both produced a 422 the user couldn't read.
+  const blocked =
+    (kind === 'forward' && !partnerId) ||
+    (kind === 'reject' && !rejectionReason.trim());
   const titles = { approve: 'Approve in-house', forward: 'Forward to partner', disburse: 'Mark as disbursed', reject: 'Reject request' };
 
   return (
@@ -221,7 +274,7 @@ function DecisionModal({ open, kind, request, onClose, onDone }) {
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={mutate.isPending}>Cancel</Button>
-          <Button variant={kind === 'reject' ? 'danger' : 'primary'} loading={mutate.isPending} onClick={submit}>
+          <Button variant={kind === 'reject' ? 'danger' : 'primary'} loading={mutate.isPending} disabled={blocked} onClick={submit}>
             Confirm
           </Button>
         </>
@@ -229,10 +282,14 @@ function DecisionModal({ open, kind, request, onClose, onDone }) {
     >
       <div className="space-y-4">
         {kind === 'forward' && (
-          <Field label="Partner" required>
+          <Field
+            label="Partner"
+            required
+            hint={partnerOptions.length === 0 ? 'No active partner organizations — create one under Partners first.' : undefined}
+          >
             <Select value={partnerId} onChange={(e) => setPartnerId(e.target.value)} required>
               <option value="">Select a partner organization…</option>
-              {(partners || []).map((p) => <option key={p.id} value={p.id}>{p.organization_name}</option>)}
+              {partnerOptions.map((p) => <option key={p.id} value={p.id}>{p.organization_name}</option>)}
             </Select>
           </Field>
         )}

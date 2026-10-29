@@ -9,6 +9,12 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "lint": "eslint src/",
+    "test": "node scripts/verify-fixes.js",
+    "check:docs": "node scripts/check-swagger.js",
+    "gen:docs": "node scripts/gen-swagger-stubs.js --write",
+    "diagnose:email": "node scripts/diagnose-email.js",
+    "diagnose:otp": "node scripts/diagnose-otp.js",
+    "verify": "npm run lint && npm run check:docs && npm test",
     "vercel-build": "echo 'No build step required for Node API'"
   },
   "dependencies": {

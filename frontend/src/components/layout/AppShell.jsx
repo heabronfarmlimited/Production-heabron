@@ -1,7 +1,23 @@
 import { useState } from 'react';
 import { NavLink, useNavigate, Outlet } from 'react-router-dom';
-import * as Icons from 'lucide-react';
-import { Menu, X, LogOut, ChevronDown, Bell } from 'lucide-react';
+// FIXED — this was `import * as Icons from 'lucide-react'`, a namespace import
+// of the entire ~1,500-icon library so that `Icons[item.icon]` could look an
+// icon up by name at runtime. That defeats tree-shaking completely and pulled
+// ~770 KB of unused icons into the bundle. The sidebar only ever uses the
+// twelve below, so they are imported by name and resolved through an explicit
+// map (the lookup still works the same way for NAV_* entries).
+import {
+  Menu, X, LogOut, ChevronDown,
+  LayoutDashboard, UserCheck, FileCheck, Users, Sprout, Gauge, Banknote,
+  Building2, BarChart3, Wallet, History, Settings, Search, PieChart,
+  AlertTriangle, Circle,
+} from 'lucide-react';
+
+const NAV_ICONS = {
+  LayoutDashboard, UserCheck, FileCheck, Users, Sprout, Gauge, Banknote,
+  Building2, BarChart3, Wallet, History, Settings, Search, PieChart,
+  AlertTriangle,
+};
 import { useAuth } from '@/lib/auth';
 import { BRAND } from '@/lib/brand';
 import { cn, initials } from '@/lib/utils';
@@ -9,9 +25,17 @@ import { NotificationBell } from '@/components/shared/NotificationBell';
 
 export function AppShell({ nav, audience }) {
   const navigate = useNavigate();
-  const { user, partner, logout } = useAuth();
+  const { user, partner, logout, isAdmin, isPartner } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  // FIXED — the shell rendered whatever nav array it was handed. A partner
+  // whose session somehow reached the admin shell (stale route, direct URL,
+  // role changed server-side mid-session) would see the full admin sidebar.
+  // The nav is now gated on the live role as well as the route guard, so the
+  // links can never be wider than the role allows.
+  const roleAllows = audience === 'admin' ? isAdmin : isPartner;
+  const items = roleAllows && Array.isArray(nav) ? nav : [];
 
   const handleLogout = async () => {
     await logout();
@@ -44,17 +68,19 @@ export function AppShell({ nav, audience }) {
             </p>
           </div>
           <button
+            type="button"
             className="ml-auto md:hidden text-smoke"
             onClick={() => setMobileOpen(false)}
+            aria-label="Close navigation menu"
           >
             <X className="size-5" />
           </button>
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
-          {nav.map((item) => {
-            const Icon = Icons[item.icon] || Icons.Circle;
+        <nav aria-label={audience === 'admin' ? 'Admin navigation' : 'Partner navigation'} className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
+          {items.map((item) => {
+            const Icon = NAV_ICONS[item.icon] || Circle;
             return (
               <NavLink
                 key={item.to}
@@ -63,7 +89,7 @@ export function AppShell({ nav, audience }) {
                 onClick={() => setMobileOpen(false)}
                 className={({ isActive }) => isActive ? 'nav-link-active' : 'nav-link'}
               >
-                <Icon className="size-4 shrink-0" />
+                <Icon className="size-4 shrink-0" aria-hidden="true" />
                 <span className="flex-1">{item.label}</span>
               </NavLink>
             );
@@ -71,7 +97,7 @@ export function AppShell({ nav, audience }) {
         </nav>
 
         {/* Footer */}
-        <div className="px-3 py-4 border-t border-whisper/70 text-[11px] text-smoke">
+        <div className="px-3 py-4 border-t border-whisper/70 text-[11px] text-smoke no-print">
           <p className="px-3.5">© {new Date().getFullYear()} Heabron Farm</p>
           <p className="px-3.5 mt-0.5">v1.0.0</p>
         </div>
@@ -86,8 +112,11 @@ export function AppShell({ nav, audience }) {
         <header className="sticky top-0 z-10 bg-bone/90 backdrop-blur-md border-b border-whisper/60">
           <div className="flex items-center gap-3 px-4 md:px-8 h-16">
             <button
+              type="button"
               className="md:hidden text-smoke"
               onClick={() => setMobileOpen(true)}
+              aria-label="Open navigation menu"
+              aria-expanded={mobileOpen}
             >
               <Menu className="size-5" />
             </button>
@@ -96,7 +125,11 @@ export function AppShell({ nav, audience }) {
             {/* User menu */}
             <div className="relative">
               <button
+                type="button"
                 onClick={() => setUserMenuOpen((v) => !v)}
+                aria-label="Account menu"
+                aria-expanded={userMenuOpen}
+                aria-haspopup="menu"
                 className="flex items-center gap-2.5 pl-2 pr-3 py-1.5 rounded-xl hover:bg-white transition"
               >
                 <div className="size-9 rounded-lg bg-forest-500 text-white font-semibold flex items-center justify-center text-xs">
@@ -117,12 +150,14 @@ export function AppShell({ nav, audience }) {
                       <p className="text-xs text-smoke truncate">{user?.email}</p>
                     </div>
                     <button
+                      type="button"
                       onClick={() => { setUserMenuOpen(false); navigate(audience === 'admin' ? '/admin/settings' : '/partner/settings'); }}
                       className="w-full text-left px-4 py-2 text-sm hover:bg-bone transition"
                     >
                       Settings
                     </button>
                     <button
+                      type="button"
                       onClick={handleLogout}
                       className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition"
                     >

@@ -16,16 +16,29 @@ export function Modal({ open, onClose, title, description, children, size = 'md'
 
   if (!open) return null;
   const sizes = { sm: 'max-w-md', md: 'max-w-xl', lg: 'max-w-3xl', xl: 'max-w-5xl' };
+  // FIXED — the dialog had no role/aria wiring and the close control was an
+  // icon-only button with no accessible name.
+  const titleId = 'modal-title';
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
       <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm" onClick={onClose} />
-      <div className={cn('relative w-full bg-white rounded-2xl shadow-elev animate-slide-up flex flex-col max-h-[92vh]', sizes[size])}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+        className={cn('relative w-full bg-white rounded-2xl shadow-elev animate-slide-up flex flex-col max-h-[92vh]', sizes[size])}
+      >
         <div className="px-6 md:px-7 pt-6 pb-4 flex items-start gap-4">
           <div className="flex-1 min-w-0">
-            <h2 className="font-display text-xl md:text-2xl font-semibold text-ink">{title}</h2>
+            <h2 id={titleId} className="font-display text-xl md:text-2xl font-semibold text-ink">{title}</h2>
             {description && <p className="text-sm text-smoke mt-1">{description}</p>}
           </div>
-          <button onClick={onClose} className="size-9 rounded-lg flex items-center justify-center text-smoke hover:bg-bone hover:text-ink transition">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close dialog"
+            className="size-9 rounded-lg flex items-center justify-center text-smoke hover:bg-bone hover:text-ink transition"
+          >
             <X className="size-5" />
           </button>
         </div>

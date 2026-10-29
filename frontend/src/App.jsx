@@ -1,6 +1,8 @@
-import { useEffect } from 'react';
+import { Component, useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { useAuth, ADMIN_ROLES, PARTNER_ROLES } from '@/lib/auth';
+// Role flags come from the store (which derives them from the live /auth/me
+// role), so the raw role lists are not needed here.
+import { useAuth } from '@/lib/auth';
 import { AppShell } from '@/components/layout/AppShell';
 import { NAV_ADMIN, NAV_PARTNER } from '@/lib/brand';
 
@@ -37,6 +39,48 @@ import PartnerWatchlistPage from '@/pages/partner/PartnerWatchlistPage';
 import PartnerCreditReportPage from '@/pages/partner/PartnerCreditReportPage';
 import PartnerProfilePage from '@/pages/partner/PartnerProfilePage';
 
+/**
+ * FIXED — there was no error boundary anywhere in the tree, so any render-time
+ * exception (a row shape the page didn't expect, a null deref in a chart) blanked
+ * the entire dashboard to a white screen with nothing in the UI to act on.
+ */
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+     
+    console.error('Unhandled UI error', error, info);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-bone px-6">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-card p-8 text-center">
+          <h1 className="font-display text-2xl font-semibold text-ink">Something went wrong</h1>
+          <p className="text-smoke mt-3 text-sm">
+            This screen hit an unexpected error. Reloading usually clears it — if it keeps
+            happening, send the details below to support.
+          </p>
+          <pre className="mt-4 text-left text-[11px] bg-bone rounded-lg p-3 overflow-x-auto text-smoke">
+            {String(this.state.error?.message || this.state.error)}
+          </pre>
+          <button type="button" onClick={() => window.location.reload()} className="btn-primary mt-6 inline-flex">
+            Reload
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
 function Spinner() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-bone">
@@ -52,11 +96,11 @@ function NoAccess({ role }) {
       <div className="max-w-md w-full bg-white rounded-2xl shadow-card p-8 text-center">
         <h1 className="font-display text-2xl font-semibold text-ink">No portal access</h1>
         <p className="text-smoke mt-3 text-sm">
-          Your account doesn't have an admin or partner role
+          Your account doesn&apos;t have an admin or partner role
           {role ? <> (current role: <span className="font-mono text-ink">{String(role)}</span>)</> : ' (no role assigned)'}.
           Ask a platform administrator to assign your role, then sign in again.
         </p>
-        <button
+        <button type="button"
           onClick={async () => { await logout(); window.location.href = '/login'; }}
           className="btn-primary mt-6 inline-flex"
         >
@@ -68,6 +112,9 @@ function NoAccess({ role }) {
 }
 
 function RequireAdmin({ children }) {
+  // The role is re-checked on every render (and re-derived from /auth/me on
+  // each refreshMe), so a revoked admin loses the shell immediately — the nav
+  // list in AppShell is gated on the same flags as a second line of defence.
   const { user, loading, isAdmin, isPartner, mustChangePassword } = useAuth();
   const location = useLocation();
   if (loading) return <Spinner />;
@@ -118,6 +165,7 @@ export default function App() {
   }, [hydrate]);
 
   return (
+    <ErrorBoundary>
     <Routes>
       <Route path="/" element={<RootRedirect />} />
 
@@ -143,6 +191,9 @@ export default function App() {
         <Route path="credit" element={<CreditPage />} />
         <Route path="credit/farmers/:farmerId" element={<FarmerDetailPage />} />
         <Route path="credit/cooperatives/:cooperativeId" element={<CooperativeDetailPage />} />
+        {/* Cooperative pages link here directly; without this alias the row
+            click on /admin/cooperatives fell through to the catch-all. */}
+        <Route path="cooperatives/:cooperativeId" element={<CooperativeDetailPage />} />
         <Route path="financing" element={<FinancingPage />} />
         <Route path="financing/:requestId" element={<FinancingDetailPage />} />
         <Route path="partners" element={<PartnersPage />} />
@@ -152,6 +203,9 @@ export default function App() {
         <Route path="activity" element={<ActivityPage />} />
         <Route path="notifications" element={<NotificationsPage audience="admin" />} />
         <Route path="settings" element={<SettingsPage />} />
+        {/* An unknown /admin/* path used to fall through to the global
+            catch-all and bounce out of the portal entirely. */}
+        <Route path="*" element={<Navigate to="/admin" replace />} />
       </Route>
 
       {/* Partner shell */}
@@ -175,9 +229,11 @@ export default function App() {
         <Route path="reports/cooperative/:cooperativeId" element={<PartnerCreditReportPage type="cooperative" />} />
         <Route path="notifications" element={<NotificationsPage audience="partner" />} />
         <Route path="settings" element={<PartnerProfilePage />} />
+        <Route path="*" element={<Navigate to="/partner" replace />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </ErrorBoundary>
   );
 }

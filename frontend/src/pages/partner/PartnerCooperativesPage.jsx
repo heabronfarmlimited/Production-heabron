@@ -7,25 +7,36 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Card, TierPill, EmptyState, Skeleton } from '@/components/ui/Card';
 import { Input, Select } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { formatNumber } from '@/lib/utils';
+import { Pagination } from '@/components/ui/DataTable';
+import { formatNumber, formatScore } from '@/lib/utils';
+
+const PAGE_SIZE = 24;
 
 export default function PartnerCooperativesPage() {
   const navigate = useNavigate();
   const [term, setTerm] = useState('');
   const [agentId, setAgentId] = useState('');
+  const [page, setPage] = useState(1);
 
+  // /partner/field-agents returns a plain array (no meta), so the unwrapped
+  // `get` is the right client here.
   const { data: agents } = useQuery({
     queryKey: ['partner-field-agents'],
-    queryFn: () => api.raw.get('/partner/field-agents').then((r) => r.data?.data || []),
+    queryFn: () => api.get('/partner/field-agents'),
   });
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['partner-cooperatives', term, agentId],
+  // FIXED — api.raw bypass replaced with the list helper, which keeps `meta`.
+  // The page also threw away everything past the first 60 rows with no
+  // pagination at all; `pageSize` is now a real page and `meta.total` drives
+  // the pager (pageSize is capped at 100 server-side).
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['partner-cooperatives', term, agentId, page],
     queryFn: () =>
-      api.raw
-        .get('/partner/cooperatives', { params: { search: term, agentId: agentId || undefined, pageSize: 60 } })
-        .then((r) => r.data?.data || []),
+      api.list('/partner/cooperatives', {
+        params: { search: term || undefined, agentId: agentId || undefined, page, pageSize: PAGE_SIZE },
+      }),
   });
+  const rows = data?.data || [];
 
   return (
     <>
@@ -41,14 +52,20 @@ export default function PartnerCooperativesPage() {
             <Search className="size-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-smoke" />
             <Input
               value={term}
-              onChange={(e) => setTerm(e.target.value)}
+              aria-label="Search cooperatives by name"
+              onChange={(e) => { setTerm(e.target.value); setPage(1); }}
               placeholder="Search cooperatives..."
               className="pl-10"
             />
           </div>
-          <Select value={agentId} onChange={(e) => setAgentId(e.target.value)} className="sm:w-64">
+          <Select
+            value={agentId}
+            aria-label="Filter cooperatives by managing field agent"
+            onChange={(e) => { setAgentId(e.target.value); setPage(1); }}
+            className="sm:w-64"
+          >
             <option value="">All field agents</option>
-            {(agents || []).map((a) => (
+            {(Array.isArray(agents) ? agents : []).map((a) => (
               <option key={a.user_id} value={a.user_id}>
                 {a.full_name}{a.state ? ` · ${a.state}` : ''}
               </option>
@@ -57,18 +74,29 @@ export default function PartnerCooperativesPage() {
         </div>
       </Card>
 
+      {/* FIXED — no error state: a failed request showed "No cooperatives
+          found", telling a lender the network is empty. */}
+      {isError && (
+        <Card padded className="mb-4 border-red-200 bg-red-50/60">
+          <p className="text-sm text-red-700">
+            Could not load cooperatives{error?.message ? `: ${error.message}` : ''}.
+          </p>
+        </Card>
+      )}
+
       {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-52" />)}
         </div>
-      ) : (data || []).length === 0 ? (
-        <EmptyState title="No cooperatives found" description="Try a different search or field-agent filter." />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon={Users}
+          title="No cooperatives found"
+          description={term || agentId ? 'Try a different search or field-agent filter.' : 'Cooperatives appear here once field agents register them.'}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {data.map((c) => {
-            const dist = {
-              A: c.tier_a_count, B: c.tier_b_count, C: c.tier_c_count, D: c.tier_d_count,
-            };
+          {rows.map((c) => {
             return (
               <Card key={c.id} className="flex flex-col">
                 <div className="flex items-start justify-between gap-2">
@@ -82,25 +110,32 @@ export default function PartnerCooperativesPage() {
                   <MapPin className="size-3" /> {[c.lga, c.state].filter(Boolean).join(', ') || '—'}
                 </p>
                 <div className="flex items-center gap-3 text-xs text-smoke mt-1">
-                  <span>{formatNumber(c.total_farmers || 0)} members</span>
+                  <span>{formatNumber(c.total_farmers ?? c.total_members ?? 0)} members</span>
                   <span>·</span>
                   <span>{formatNumber(c.scored_farmers || 0)} scored</span>
                 </div>
 
+                {/* FIXED — this card used to render an A/B/C/D "tier mix" grid
+                    from c.tier_a_count … c.tier_d_count. partner.browse-
+                    Cooperatives only selects average_score, cooperative_tier,
+                    total_farmers and scored_farmers from the score join, so
+                    those four fields are never returned: the grid showed a
+                    hard "0" in all four buckets for every cooperative on the
+                    page — invented data a lender could act on. Removed; the
+                    real per-tier breakdown is on the cooperative's credit
+                    report, which "View details" opens. */}
                 <div className="mt-3 rounded-xl bg-bone/60 p-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-smoke">Avg credit score</span>
+                    {/* `|| 0` printed "0/100" for an unscored cooperative,
+                        which reads as a real (terrible) score. */}
                     <span className="font-display text-lg font-bold text-forest-700">
-                      {Number(c.average_score || 0).toFixed(0)}<span className="text-xs text-smoke">/100</span>
+                      {c.average_score == null || Number(c.average_score) === 0 ? (
+                        <span className="text-smoke text-sm font-medium">Not yet scored</span>
+                      ) : (
+                        <>{formatScore(c.average_score, 0)}<span className="text-xs text-smoke">/100</span></>
+                      )}
                     </span>
-                  </div>
-                  <div className="grid grid-cols-4 gap-1 mt-2">
-                    {['A', 'B', 'C', 'D'].map((t) => (
-                      <div key={t} className="text-center rounded-md bg-white py-1">
-                        <div className="text-[11px] font-semibold text-ink">{dist[t] ?? 0}</div>
-                        <div className="text-[9px] text-smoke">{t}</div>
-                      </div>
-                    ))}
                   </div>
                 </div>
 
@@ -116,6 +151,13 @@ export default function PartnerCooperativesPage() {
           })}
         </div>
       )}
+
+      <Pagination
+        page={data?.meta?.page || page}
+        pageSize={data?.meta?.pageSize || PAGE_SIZE}
+        total={data?.meta?.total || 0}
+        onPageChange={setPage}
+      />
     </>
   );
 }

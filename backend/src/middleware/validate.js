@@ -58,23 +58,7 @@ function validate(schema, source = 'body') {
   };
 }
 
-function validateMany(specs) {
-  return function (req, res, next) {
-    for (const spec of specs) {
-      const { error, value } = spec.schema.validate(req[spec.source], {
-        abortEarly: false,
-        stripUnknown: true,
-        convert: true,
-      });
-      if (error) {
-        const details = error.details.map((d) => ({ field: d.path.join('.'), message: d.message }));
-        return unprocessable(res, `Validation failed (${spec.source})`, details);
-      }
-      req[spec.source] = value;
-    }
-    return next();
-  };
-}
+// FIXED — `validateMany` was exported but mounted on no route. Removed.
 
 function requireParamUuid(name) {
   return function (req, res, next) {
@@ -87,4 +71,4 @@ function requireParamUuid(name) {
   };
 }
 
-module.exports = { validate, validateMany, requireParamUuid };
+module.exports = { validate, requireParamUuid };

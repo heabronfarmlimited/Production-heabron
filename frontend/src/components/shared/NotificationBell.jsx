@@ -20,15 +20,17 @@ export function NotificationBell({ audience }) {
 
   // List — always enabled and polling, so opening the bell shows current data
   // immediately (no "fetch only on open" delay). Polls a little slower.
+  // FIXED — went through the unwrapped `get`, which discarded `meta`; this is
+  // a paginated endpoint, so it now uses the list helper.
   const { data: list } = useQuery({
     queryKey: ['notifications-list', audience],
-    queryFn: () => api.get(`${base}/notifications?pageSize=15`),
+    queryFn: () => api.list(`${base}/notifications`, { params: { pageSize: 15 } }),
     refetchInterval: 30_000,
     refetchOnWindowFocus: true,
   });
 
-  const count = unread?.count || 0;
-  const items = Array.isArray(list) ? list : (list?.data || []);
+  const count = Number(unread?.count) > 0 ? Number(unread.count) : 0;
+  const items = Array.isArray(list?.data) ? list.data : [];
 
   async function markAll() {
     await api.patch(`${base}/notifications/read-all`);
@@ -56,8 +58,10 @@ export function NotificationBell({ audience }) {
     <div className="relative">
       <button
         onClick={openPanel}
+        type="button"
         className="size-10 rounded-xl hover:bg-white transition flex items-center justify-center text-smoke relative"
-        aria-label="Notifications"
+        aria-label={count > 0 ? `Notifications, ${count} unread` : 'Notifications'}
+        aria-expanded={open}
       >
         <Bell className="size-5" />
         {count > 0 && (
@@ -74,17 +78,18 @@ export function NotificationBell({ audience }) {
             <div className="flex items-center justify-between px-4 py-3 border-b border-whisper/60">
               <p className="font-display text-base font-semibold">Notifications</p>
               {count > 0 && (
-                <button onClick={markAll} className="text-xs text-forest-500 hover:text-forest-700 font-medium">
+                <button type="button" onClick={markAll} className="text-xs text-forest-500 hover:text-forest-700 font-medium">
                   Mark all read
                 </button>
               )}
             </div>
             <div className="max-h-96 overflow-y-auto divide-y divide-whisper/40">
               {items.length === 0 && (
-                <p className="px-4 py-8 text-sm text-smoke text-center">You're all caught up</p>
+                <p className="px-4 py-8 text-sm text-smoke text-center">You&apos;re all caught up</p>
               )}
               {items.map((n) => (
                 <button
+                  type="button"
                   key={n.id}
                   onClick={() => markOne(n)}
                   className={cn('w-full text-left px-4 py-3 hover:bg-bone/60 transition', !n.is_read && 'bg-forest-50/40')}

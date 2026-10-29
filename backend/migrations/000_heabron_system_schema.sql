@@ -95,7 +95,7 @@ DO $$ BEGIN
     'financing_request_submitted','financing_approved','financing_rejected','financing_disbursed',
     'repayment_recorded','delivery_logged','farmer_added','cooperative_added',
     'credit_score_updated','partner_invited','partner_password_reset',
-    'settlement_requested','settlement_approved',
+    'settlement_requested','settlement_approved','settlement_rejected',
     'cash_purchase_submitted','cash_purchase_confirmed','cash_purchase_rejected','disbursement_recorded',
     'change_request_submitted','change_request_approved','change_request_rejected',
     'yield_verification_submitted','yield_verified','yield_rejected'
@@ -115,6 +115,11 @@ ALTER TYPE public.notification_type ADD VALUE IF NOT EXISTS 'change_request_reje
 ALTER TYPE public.notification_type ADD VALUE IF NOT EXISTS 'yield_verification_submitted';
 ALTER TYPE public.notification_type ADD VALUE IF NOT EXISTS 'yield_verified';
 ALTER TYPE public.notification_type ADD VALUE IF NOT EXISTS 'yield_rejected';
+-- A REJECTED settlement had no notification value, so an agent whose cash-out
+-- was refused was never told. Also shipped separately as
+-- 010_settlement_rejected_notification.sql for databases already created from
+-- an earlier copy of this file.
+ALTER TYPE public.notification_type ADD VALUE IF NOT EXISTS 'settlement_rejected';
 
 -- =============================================================================
 -- 3. CORE TABLES
@@ -981,11 +986,31 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 -- =============================================================================
 -- 13. STORAGE BUCKETS (from 007)
 -- =============================================================================
+-- The `public` flag here must agree with `isPublic` in the BUCKETS map in
+-- src/controllers/uploads.controller.js, because that map decides whether the
+-- API stores a permanent public URL or a signed one.
+--
+-- FIXED — delivery-proofs and transaction-receipts were `true` here while the
+-- controller has always had `isPublic: false` for every kind that writes to
+-- them. That combination was the worst of both: the objects were world-readable
+-- to anyone with the URL, so the signed URL bought no protection, yet it still
+-- EXPIRED — so the link stored against a delivery or a payment receipt stopped
+-- working after its lifetime while the file itself stayed publicly fetchable.
+--
+-- These hold financial evidence (payment receipts, disbursement and delivery
+-- proof), so they are now private, matching the code. This changes no API
+-- behaviour — the controller already issued signed URLs for them — it only
+-- stops the objects being readable outside this API's authorisation. Existing
+-- signed URLs keep working: a signed URL does not depend on the public flag.
+-- POST /agent/uploads/sign-url re-mints a link for an older record.
+--
+-- partner-logos stays public: logos are rendered in <img> tags by the
+-- dashboards and are not sensitive.
 INSERT INTO storage.buckets (id, name, public) VALUES
   ('agent-documents',      'agent-documents',      false),
   ('farmer-documents',     'farmer-documents',     false),
-  ('delivery-proofs',      'delivery-proofs',      true),
-  ('transaction-receipts', 'transaction-receipts', true),
+  ('delivery-proofs',      'delivery-proofs',      false),
+  ('transaction-receipts', 'transaction-receipts', false),
   ('partner-logos',        'partner-logos',        true)
 ON CONFLICT (id) DO UPDATE SET public = EXCLUDED.public;
 

@@ -363,29 +363,6 @@ function settlementApproved({ recipientName, amount }) {
 }
 
 // ============================================================================
-// 16. Credit score alert (admin)
-// ============================================================================
-function creditScoreAlert({ adminName, cooperativeName, oldScore, newScore, tier }) {
-  return {
-    subject: `Credit score alert: ${cooperativeName}`,
-    html: baseTemplate({
-      title: 'Credit score alert',
-      eyebrow: 'Credit scoring',
-      preheader: `${cooperativeName} moved to Tier ${tier}`,
-      bodyHtml: `
-        ${heading('Credit score change')}
-        ${lede(`${adminName ? `Hi ${adminName}, the` : 'The'} credit score for <strong>${cooperativeName}</strong> has changed.`)}
-        ${detailTable([
-          { label: 'Previous score', value: oldScore },
-          { label: 'New score', value: newScore },
-          { label: 'New tier', value: pill(`Tier ${tier}`, tier === 'A' ? 'green' : tier === 'D' ? 'red' : 'gold') },
-        ])}
-      `,
-    }),
-  };
-}
-
-// ============================================================================
 // 17. Manual cash purchase submitted (admin notification) — NEW
 // ============================================================================
 function cashPurchaseSubmitted({ adminName, agentName, farmerName, amount }) {
@@ -492,7 +469,6 @@ module.exports = {
   repaymentRecorded,
   settlementRequested,
   settlementApproved,
-  creditScoreAlert,
   cashPurchaseSubmitted,
   cashPurchaseDecision,
   changeRequestDecision,

@@ -9,15 +9,17 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Field, Input, Select } from '@/components/ui/Input';
 import toast from 'react-hot-toast';
+import { formatScore } from '@/lib/utils';
 
 export default function BenchmarksPage() {
   const [page, setPage] = useState(1);
   const [modalOpen, setModalOpen] = useState(false);
   const qc = useQueryClient();
 
-  const { data, isLoading } = useQuery({
+  // FIXED — api.raw bypass replaced with the list helper (keeps `meta`).
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['admin-benchmarks', page],
-    queryFn: () => api.raw.get('/admin/benchmarks', { params: { page, pageSize: 25 } }).then((r) => r.data),
+    queryFn: () => api.list('/admin/benchmarks', { params: { page, pageSize: 25 } }),
   });
 
   const rows = data?.data || [];
@@ -36,6 +38,12 @@ export default function BenchmarksPage() {
         }
       />
 
+      {isError && (
+        <Card padded className="mb-4 border-red-200 bg-red-50/60">
+          <p className="text-sm text-red-700">Could not load benchmarks{error?.message ? `: ${error.message}` : ''}.</p>
+        </Card>
+      )}
+
       <DataTable
         loading={isLoading}
         empty={
@@ -51,12 +59,13 @@ export default function BenchmarksPage() {
           { key: 'state', label: 'State' },
           { key: 'lga', label: 'LGA', render: (r) => r.lga || '—' },
           { key: 'season', label: 'Season', render: (r) => r.season || 'All' },
-          { key: 'benchmark_yield_tonnes_per_hectare', label: 'Benchmark (t/ha)', align: 'right', render: (r) => Number(r.benchmark_yield_tonnes_per_hectare).toFixed(2) },
+          // FIXED — Number(null).toFixed(2) printed "NaN".
+          { key: 'benchmark_yield_tonnes_per_hectare', label: 'Benchmark (t/ha)', align: 'right', render: (r) => formatScore(r.benchmark_yield_tonnes_per_hectare, 2) },
           { key: 'source', label: 'Source', render: (r) => <span className="text-smoke text-xs">{r.source || 'extension'}</span> },
         ]}
         rows={rows}
       />
-      {meta && <Pagination page={meta.page} pageSize={meta.pageSize} total={meta.total} onPageChange={setPage} />}
+      <Pagination page={meta?.page || page} pageSize={meta?.pageSize || 25} total={meta?.total || 0} onPageChange={setPage} />
 
       <BenchmarkModal
         open={modalOpen}
@@ -88,15 +97,31 @@ function BenchmarkModal({ open, onClose, onSaved }) {
       onSaved();
       setForm({ crop: '', state: '', lga: '', season: '', benchmarkYieldTonnesPerHectare: '', source: 'extension' });
     },
+    // FIXED — no error handler, so a rejected upsert (e.g. a duplicate
+    // crop/state/lga/season key) left the modal open with no explanation.
+    onError: (e) => toast.error(e?.response?.data?.error?.message || e?.message || 'Could not save benchmark'),
   });
 
+  const yieldValue = Number(form.benchmarkYieldTonnesPerHectare);
+  const canSave = form.crop.trim() && form.state.trim() && Number.isFinite(yieldValue) && yieldValue > 0;
+
   function submit(e) {
-    e.preventDefault();
+    e?.preventDefault?.();
+    // FIXED — the footer button submitted whatever was typed, so a blank crop
+    // or a non-numeric benchmark produced a confusing server-side failure.
+    if (!canSave) {
+      toast.error('Crop, state and a positive benchmark yield are all required');
+      return;
+    }
     mutate.mutate({
-      ...form,
-      benchmarkYieldTonnesPerHectare: Number(form.benchmarkYieldTonnesPerHectare),
-      lga: form.lga || undefined,
+      crop: form.crop.trim().toLowerCase(),
+      state: form.state.trim(),
+      benchmarkYieldTonnesPerHectare: yieldValue,
+      lga: form.lga.trim() || undefined,
+      // Season is free text on regional_benchmarks; 'wet' | 'dry' matches the
+      // values the scoring engine looks up, and blank means "all seasons".
       season: form.season || undefined,
+      source: form.source || undefined,
     });
   }
 
@@ -109,7 +134,7 @@ function BenchmarkModal({ open, onClose, onSaved }) {
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={submit} loading={mutate.isPending}>Save</Button>
+          <Button onClick={submit} loading={mutate.isPending} disabled={!canSave}>Save</Button>
         </>
       }
     >

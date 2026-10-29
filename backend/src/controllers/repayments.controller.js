@@ -1,23 +1,61 @@
 'use strict';
 
 const { supabaseAdmin } = require('../config/supabase');
-const { ok, created, notFound, forbidden, paginated, badRequest, fail } = require('../utils/response');
+const { ok, created, notFound, forbidden, paginated, badRequest, conflict, fail } = require('../utils/response');
 const { parsePagination } = require('../utils/pagination');
 const { logActivity } = require('../utils/activity');
-const { safeRecalculateFarmer } = require('../services/credit-score');
+const { safeRecalculateFarmer, loanPrincipal } = require('../services/credit-score');
+const { getProfileFor } = require('../utils/profiles');
 const email = require('../services/email');
 const logger = require('../utils/logger');
+
+/** Statuses a loan must be in before a repayment can be recorded against it. */
+const REPAYABLE_STATUSES = ['disbursed', 'approved'];
+
+/**
+ * Recompute a loan's repayment position from its active (non-voided) records,
+ * and keep the cached `financing_requests.total_repaid` column in step.
+ *
+ * FIXED — the schema declares `total_repaid NUMERIC(12,2) DEFAULT 0` with the
+ * comment "cached; maintained by app", but nothing in the codebase ever wrote
+ * it. It sat at 0 for every loan ever created, so any consumer trusting that
+ * column (it is selected by `financing.getById` via `select('*')`, and both
+ * dashboards read the request object) reported a fully-repaid loan as having
+ * repaid nothing. It is now maintained on every repayment and every void.
+ */
+async function recomputeLoanPosition(sb, financing) {
+  const { data: payments, error } = await sb
+    .from('repayment_records')
+    .select('amount_paid')
+    .eq('financing_request_id', financing.id)
+    .eq('voided', false)
+    .limit(5000);
+  if (error) throw error;
+
+  const totalPaid = (payments || []).reduce((s, r) => {
+    const n = Number(r.amount_paid);
+    return Number.isFinite(n) && n > 0 ? s + n : s;
+  }, 0);
+  const rounded = Math.round(totalPaid * 100) / 100;
+  // `loanPrincipal` is shared with the credit-score engine so "how much is
+  // owed" cannot mean two different things in two places.
+  const principal = loanPrincipal(financing);
+  const outstanding = Math.max(0, Math.round((principal - rounded) * 100) / 100);
+
+  return { totalPaid: rounded, principal, outstanding, paymentCount: (payments || []).length };
+}
 
 async function list(req, res) {
   const sb = supabaseAdmin();
   const { page, pageSize, from, to } = parsePagination(req.query);
-  const { startDate, endDate } = req.query;
+  const { startDate, endDate, farmerId } = req.query;
 
   let q = sb.from('repayment_records').select(
     `*, farmers(id, full_name), financing_requests(id, loan_amount, cooperative_id, cooperatives(name))`,
     { count: 'exact' }
   );
   if (req.user.role === 'field_agent') q = q.eq('recorded_by_agent_id', req.user.userId);
+  if (farmerId) q = q.eq('farmer_id', farmerId);
   if (startDate) q = q.gte('payment_date', startDate);
   if (endDate) q = q.lte('payment_date', endDate);
   q = q.order('payment_date', { ascending: false }).range(from, to);
@@ -47,11 +85,11 @@ async function create(req, res) {
       hint: 'Check the ID matches a row in financing_requests. If the row exists in the dashboard but this endpoint returns 404, confirm the API and dashboard point at the same Supabase project.',
     });
   }
-  if (!['disbursed', 'approved'].includes(financing.status)) {
+  if (!REPAYABLE_STATUSES.includes(financing.status)) {
     return badRequest(res, `Cannot record repayment — financing request status is "${financing.status}". Repayments can only be recorded after the request is approved or disbursed.`, {
       financingRequestId: financing.id,
       currentStatus: financing.status,
-      allowedStatuses: ['approved', 'disbursed'],
+      allowedStatuses: REPAYABLE_STATUSES,
     });
   }
 
@@ -67,6 +105,46 @@ async function create(req, res) {
   if (faErr) throw faErr;
   if (!farmer) {
     return fail(res, 404, 'NOT_FOUND', 'Farmer not found', { attemptedFarmerId: body.farmerId });
+  }
+
+  // FIXED — nothing checked that the farmer being credited was actually the
+  // borrower on this loan, or that the agent is allowed to touch that farmer.
+  // An agent could record farmer A's repayment against farmer B's loan, which
+  // moved credit score between farmers (the score reads
+  // `repayment_records.financing_request_id`, the notification reads
+  // `farmer_id`) and corrupted both farmers' histories.
+  if (req.user.role === 'field_agent' && farmer.created_by_agent_id !== req.user.userId) {
+    return forbidden(res, 'That farmer was not onboarded by you');
+  }
+  if (financing.farmer_id && financing.farmer_id !== farmer.id) {
+    return badRequest(res, 'That farmer is not the borrower on this financing request', {
+      financingRequestId: financing.id,
+      loanFarmerId: financing.farmer_id,
+      submittedFarmerId: farmer.id,
+    });
+  }
+
+  // FIXED — no idempotency at all. The mobile app retries on a dropped
+  // connection (the common case in the field), and each retry inserted another
+  // repayment_record. The duplicate counted twice toward `total_paid`, which
+  // feeds the repayment-rate component of the credit score and can
+  // auto-complete a loan that is not actually repaid. A payment reference
+  // identifies one real transfer, so it must be unique per loan.
+  if (body.referenceNumber) {
+    const { data: dupe, error: dupeErr } = await sb
+      .from('repayment_records')
+      .select('id, amount_paid, payment_date')
+      .eq('financing_request_id', body.financingRequestId)
+      .eq('reference_number', body.referenceNumber)
+      .eq('voided', false)
+      .limit(1);
+    if (dupeErr) throw dupeErr;
+    if (dupe?.length) {
+      return conflict(res, 'A repayment with this reference number is already recorded for this loan', {
+        referenceNumber: body.referenceNumber,
+        existingRepaymentId: dupe[0].id,
+      });
+    }
   }
 
   const { data, error } = await sb
@@ -90,66 +168,89 @@ async function create(req, res) {
     throw error;
   }
 
-  // Outstanding balance + auto-complete if paid in full.
-  // Voided (reversed) repayments are excluded from the sum.
-  const { data: payments } = await sb
-    .from('repayment_records')
-    .select('amount_paid')
-    .eq('financing_request_id', body.financingRequestId)
-    .eq('voided', false);
-  const totalPaid = (payments || []).reduce((s, r) => s + Number(r.amount_paid || 0), 0);
-  const loanAmount = Number(financing.loan_amount || 0);
-  const outstanding = Math.max(0, loanAmount - totalPaid);
-  if (outstanding <= 0) {
-    try {
-      await sb.from('financing_requests').update({ status: 'completed' }).eq('id', body.financingRequestId);
-    } catch (e) { logger.warn({ err: e.message }, 'mark financing complete failed'); }
+  const position = await recomputeLoanPosition(sb, financing);
+
+  // Cache the repaid total + auto-complete if paid in full.
+  // FIXED — the old code wrapped the status update in `try/catch`, but
+  // supabase-js RESOLVES with `{ error }` instead of throwing, so the catch
+  // was unreachable and a failed "mark completed" was silently discarded. The
+  // loan stayed `disbursed` forever while showing a zero balance.
+  const patch = { total_repaid: position.totalPaid };
+  let financingStatus = financing.status;
+  if (position.outstanding <= 0 && position.principal > 0) {
+    patch.status = 'completed';
+    financingStatus = 'completed';
+  }
+  const { error: updErr } = await sb
+    .from('financing_requests')
+    .update(patch)
+    .eq('id', body.financingRequestId);
+  if (updErr) {
+    logger.error(
+      { err: updErr.message, code: updErr.code, details: updErr.details, financingRequestId: body.financingRequestId },
+      'financing position update failed — total_repaid/status now stale'
+    );
+    financingStatus = financing.status;
   }
 
-  safeRecalculateFarmer(body.farmerId, { triggerReason: 'repayment_recorded' });
+  // FIXED — was called without `await`. On Vercel the lambda freezes when the
+  // response is written, so this recalculation was killed and the farmer's
+  // score never reflected the repayment that had just been recorded.
+  await safeRecalculateFarmer(body.farmerId, { triggerReason: 'repayment_recorded' });
 
-  // Two-step lookup for the submitting agent's profile.
+  // Notify the submitting agent (two-step profile lookup — see utils/profiles).
   try {
     if (financing.submitted_by_agent_id) {
-      const { data: submitter } = await sb
-        .from('profiles')
-        .select('email, full_name')
-        .eq('user_id', financing.submitted_by_agent_id)
-        .maybeSingle();
+      const submitter = await getProfileFor(sb, financing.submitted_by_agent_id);
 
-      await sb.from('notifications').insert({
+      const { error: notifyErr } = await sb.from('notifications').insert({
         user_id: financing.submitted_by_agent_id,
         type: 'repayment_recorded',
         title: 'Repayment recorded',
         message: `₦${Number(body.amountPaid).toLocaleString()} from ${farmer.full_name}`,
-        metadata: { repaymentId: data.id, financingRequestId: body.financingRequestId, outstandingBalance: outstanding },
+        metadata: {
+          repaymentId: data.id,
+          financingRequestId: body.financingRequestId,
+          outstandingBalance: position.outstanding,
+        },
       });
+      if (notifyErr) throw notifyErr;
 
       if (submitter?.email) {
-        email.safe(email.sendRepaymentRecorded)(submitter.email, {
+        const result = await email.safe(email.sendRepaymentRecorded)(submitter.email, {
           recipientName: submitter.full_name,
           farmerName: farmer.full_name,
           amount: body.amountPaid,
-          outstandingBalance: outstanding,
+          outstandingBalance: position.outstanding,
         });
+        if (result?.error) {
+          logger.warn({ err: result.error, to: submitter.email }, 'repayment email rejected');
+        }
       }
     }
   } catch (e) {
-    logger.warn({ err: e.message }, 'repayment notification/email failed');
+    logger.warn({ err: e.message, code: e.code }, 'repayment notification/email failed');
   }
 
-  try {
-    await logActivity({ actor: req.user, action: 'repayment_recorded', entityType: 'repayment', entityId: data.id, req });
-  } catch (e) {
-    logger.warn({ err: e.message }, 'repayment activity log failed');
-  }
+  await logActivity({
+    actor: req.user,
+    action: 'repayment_recorded',
+    entityType: 'repayment',
+    entityId: data.id,
+    metadata: { amount: body.amountPaid, financingRequestId: body.financingRequestId },
+    req,
+  });
 
+  // Response shape unchanged. NOTE: `loanAmount` and `outstandingBalance` now
+  // measure against the disbursed/approved principal rather than the requested
+  // `loan_amount` — see `loanPrincipal` in the credit-score service. Same keys,
+  // corrected values; listed under BREAKING in AUDIT_BACKEND.md.
   return created(res, {
     ...data,
-    outstandingBalance: outstanding,
-    totalPaid,
-    loanAmount,
-    financingStatus: outstanding <= 0 ? 'completed' : financing.status,
+    outstandingBalance: position.outstanding,
+    totalPaid: position.totalPaid,
+    loanAmount: position.principal,
+    financingStatus,
   });
 }
 
@@ -179,45 +280,63 @@ async function voidRepayment(req, res) {
   const sb = supabaseAdmin();
   const { reason } = req.body;
 
-  const { data: rec } = await sb
+  const { data: rec, error: readErr } = await sb
     .from('repayment_records')
     .select('*')
     .eq('id', req.params.repaymentId)
     .maybeSingle();
+  if (readErr) throw readErr;
   if (!rec) return notFound(res, 'Repayment not found');
-  if (rec.voided) return badRequest(res, 'This repayment is already voided');
+  if (rec.voided) return conflict(res, 'This repayment is already voided', { repaymentId: rec.id });
 
-  await sb.from('repayment_records').update({
-    voided: true,
-    voided_at: new Date().toISOString(),
-    voided_by_admin_id: req.user.userId,
-    void_reason: reason || null,
-  }).eq('id', rec.id);
+  // FIXED — the void write discarded its error, so a failed update still
+  // reported `{ voided: true }` and went on to "recompute" a balance from
+  // records that had not actually changed. Claimed conditionally so two
+  // concurrent voids cannot both subtract the same amount.
+  const { data: claimed, error: voidErr } = await sb
+    .from('repayment_records')
+    .update({
+      voided: true,
+      voided_at: new Date().toISOString(),
+      voided_by_admin_id: req.user.userId,
+      void_reason: reason || null,
+    })
+    .eq('id', rec.id)
+    .eq('voided', false)
+    .select('id');
+  if (voidErr) throw voidErr;
+  if (!claimed || claimed.length === 0) {
+    return conflict(res, 'This repayment was voided by someone else a moment ago', { repaymentId: rec.id });
+  }
 
   // Recompute outstanding from the remaining (active) repayments.
-  const { data: financing } = await sb
+  const { data: financing, error: finErr } = await sb
     .from('financing_requests')
-    .select('id, loan_amount, status')
+    .select('id, loan_amount, approved_amount, disbursed_amount, status')
     .eq('id', rec.financing_request_id)
     .maybeSingle();
+  if (finErr) throw finErr;
 
   if (financing) {
-    const { data: active } = await sb
-      .from('repayment_records')
-      .select('amount_paid')
-      .eq('financing_request_id', financing.id)
-      .eq('voided', false);
-    const totalPaid = (active || []).reduce((s, r) => s + Number(r.amount_paid || 0), 0);
-    const outstanding = Math.max(0, Number(financing.loan_amount || 0) - totalPaid);
-
+    const position = await recomputeLoanPosition(sb, financing);
+    const patch = { total_repaid: position.totalPaid };
     // If it was completed but now owes again, revert status to disbursed.
-    if (financing.status === 'completed' && outstanding > 0) {
-      await sb.from('financing_requests').update({ status: 'disbursed' }).eq('id', financing.id);
+    if (financing.status === 'completed' && position.outstanding > 0) {
+      patch.status = 'disbursed';
+    }
+    const { error: updErr } = await sb.from('financing_requests').update(patch).eq('id', financing.id);
+    if (updErr) {
+      logger.error(
+        { err: updErr.message, code: updErr.code, financingRequestId: financing.id },
+        'financing position update after void failed'
+      );
     }
   }
 
   // Rescore the farmer (excludes voided automatically).
-  if (rec.farmer_id) safeRecalculateFarmer(rec.farmer_id, { triggerReason: 'repayment_voided' });
+  // FIXED — was fire-and-forget, so voiding a repayment left the inflated
+  // score in place: the correction was recorded but never applied.
+  if (rec.farmer_id) await safeRecalculateFarmer(rec.farmer_id, { triggerReason: 'repayment_voided' });
 
   await logActivity({
     actor: req.user,

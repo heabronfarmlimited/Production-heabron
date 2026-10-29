@@ -4,12 +4,12 @@ import { Check, X, FileCheck, ShieldCheck, AlertCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { Card, EmptyState, StatusPill, Skeleton } from '@/components/ui/Card';
+import { Card, EmptyState, StatusPill } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Field, Textarea } from '@/components/ui/Input';
 import { DataTable, Pagination } from '@/components/ui/DataTable';
-import { formatDateTime, initials } from '@/lib/utils';
+import { formatDateTime, formatDate, initials } from '@/lib/utils';
 
 export default function ApplicationsPage() {
   const [status, setStatus] = useState('pending');
@@ -17,14 +17,21 @@ export default function ApplicationsPage() {
   const [selected, setSelected] = useState(null);
   const qc = useQueryClient();
 
-  const { data: list, isLoading } = useQuery({
+  // FIXED — api.raw bypass replaced with the list helper (keeps `meta`).
+  const { data: list, isLoading, isError, error } = useQuery({
     queryKey: ['applications', status, page],
-    queryFn: () => api.raw.get('/admin/agent-applications', { params: { status, page, pageSize: 20 } }).then((r) => r.data),
+    queryFn: () => api.list('/admin/agent-applications', { params: { status, page, pageSize: 20 } }),
   });
 
   const decide = useMutation({
+    // `decision` must be 'approve' | 'reject' (present tense here — the
+    // financing endpoint uses the past tense), and rejectionReason is required
+    // by the validator only when rejecting, so don't send a blank one.
     mutationFn: ({ id, decision, rejectionReason }) =>
-      api.post(`/admin/agent-applications/${id}/decision`, { decision, rejectionReason }),
+      api.post(`/admin/agent-applications/${id}/decision`, {
+        decision,
+        rejectionReason: decision === 'reject' ? rejectionReason : undefined,
+      }),
     onSuccess: () => {
       toast.success('Decision recorded');
       qc.invalidateQueries({ queryKey: ['applications'] });
@@ -49,12 +56,12 @@ export default function ApplicationsPage() {
         </div>
       ),
     },
-    { key: 'phone', label: 'Phone', render: (r) => <span className="tabular">{r.phone}</span> },
+    { key: 'phone', label: 'Phone', render: (r) => <span className="tabular">{r.phone || '—'}</span> },
     {
       key: 'location',
       label: 'Location',
       render: (r) => (
-        <span className="text-smoke">{[r.lga, r.state].filter(Boolean).join(', ')}</span>
+        <span className="text-smoke">{[r.lga, r.state].filter(Boolean).join(', ') || '—'}</span>
       ),
     },
     {
@@ -67,7 +74,8 @@ export default function ApplicationsPage() {
           ) : r.nin_verification_status === 'mismatch' ? (
             <><AlertCircle className="size-3.5 text-harvest-500" /> <span className="text-harvest-700 font-medium">Mismatch</span></>
           ) : (
-            <><AlertCircle className="size-3.5 text-red-500" /> <span className="text-red-700 font-medium">{r.nin_verification_status}</span></>
+            // FIXED — rendered the raw enum, and nothing at all when null.
+            <><AlertCircle className="size-3.5 text-red-500" /> <span className="text-red-700 font-medium capitalize">{(r.nin_verification_status || 'unverified').replace(/_/g, ' ')}</span></>
           )}
         </span>
       ),
@@ -93,7 +101,7 @@ export default function ApplicationsPage() {
 
       <div className="flex items-center gap-2 mb-4">
         {['pending', 'active', 'rejected'].map((s) => (
-          <button
+          <button type="button"
             key={s}
             onClick={() => { setStatus(s); setPage(1); }}
             className={`px-4 py-1.5 rounded-full text-sm font-medium capitalize transition ${status === s ? 'bg-forest-500 text-white' : 'bg-white border border-whisper text-smoke hover:text-ink'}`}
@@ -103,10 +111,16 @@ export default function ApplicationsPage() {
         ))}
       </div>
 
+      {isError && (
+        <Card padded className="mb-4 border-red-200 bg-red-50/60">
+          <p className="text-sm text-red-700">Could not load applications{error?.message ? `: ${error.message}` : ''}.</p>
+        </Card>
+      )}
+
       <DataTable
         loading={isLoading}
         columns={columns}
-        rows={list?.data || []}
+        rows={list?.data}
         empty={
           <EmptyState
             icon={FileCheck}
@@ -173,7 +187,8 @@ function ApplicationModal({ application, onClose, onDecide, submitting }) {
         <Detail label="State" value={application.state} />
         <Detail label="LGA" value={application.lga} />
         <Detail label="NIN" value={<span className="tabular">{application.nin}</span>} />
-        <Detail label="Date of Birth" value={application.date_of_birth} />
+        {/* FIXED — printed the raw ISO date string ("1987-04-02"). */}
+        <Detail label="Date of Birth" value={application.date_of_birth ? formatDate(application.date_of_birth) : null} />
         <Detail label="NIN Verification" value={<StatusPill status={application.nin_verification_status} />} />
         <Detail label="Status" value={<StatusPill status={application.status} />} />
       </dl>

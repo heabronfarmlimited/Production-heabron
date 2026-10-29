@@ -101,6 +101,12 @@ router.get('/wallet/transactions', validate(v.listQuery, 'query'), asyncHandler(
 router.get('/wallet/transactions/:transactionId', requireParamUuid('transactionId'), asyncHandler(wallet.getTransaction));
 router.post('/wallet/settlements', validate(v.createSettlement), asyncHandler(wallet.requestSettlement));
 router.get('/wallet/settlements', validate(v.listQuery, 'query'), asyncHandler(wallet.listSettlements));
+// Manual cash-purchase proof. These two handlers were implemented, exported and
+// documented, but never registered — which left the admin side of the flow
+// (GET /admin/cash-purchases and POST /admin/cash-purchases/:id/confirm) with
+// nothing to list or confirm.
+router.get('/wallet/cash-purchases', validate(v.listQuery, 'query'), asyncHandler(wallet.listCashPurchases));
+router.post('/wallet/cash-purchases', validate(v.recordCashPurchase), asyncHandler(wallet.recordCashPurchase));
 
 // --- Notifications ---
 router.get('/notifications', validate(v.listQuery, 'query'), asyncHandler(notifications.list));
@@ -110,9 +116,15 @@ router.patch('/notifications/read-all', asyncHandler(notifications.markAllRead))
 router.delete('/notifications', asyncHandler(notifications.clearAll));
 
 // --- File uploads ---
+// FIXED — ROUTE ORDERING BUG. `/uploads/sign-url` was registered AFTER
+// `/uploads/:kind`, so Express matched the parameterised route first with
+// `kind = 'sign-url'`. Every call to the sign-url endpoint went to
+// `uploadGeneric`, which answered 400 "Unknown upload kind: sign-url" — the
+// endpoint was unreachable for as long as it has existed. The specific path
+// must be declared before the parameter that would swallow it.
+router.post('/uploads/sign-url', validate(v.signUrl), asyncHandler(uploads.signUrl));
 router.post('/uploads/:kind', imageUpload.single('file'), asyncHandler(uploads.uploadGeneric));
 router.post('/uploads-doc/:kind', docUpload.single('file'), asyncHandler(uploads.uploadGeneric));
-router.post('/uploads/sign-url', asyncHandler(uploads.signUrl));
 
 // --- Bulk CSV import ---
 router.post('/imports', csvUpload.single('file'), asyncHandler(imports.bulkImport));

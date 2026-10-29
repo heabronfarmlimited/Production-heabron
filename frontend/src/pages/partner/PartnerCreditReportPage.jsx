@@ -11,22 +11,71 @@ import { Card, MetricCard, TierPill, Skeleton, StatusPill } from '@/components/u
 import { Button } from '@/components/ui/Button';
 import { FarmMap } from '@/components/ui/FarmMap';
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip } from 'recharts';
-import { formatNaira, formatDate, formatNumber, initials } from '@/lib/utils';
+import { formatNaira, formatDate, formatNumber, formatScore, initials, sumAmounts } from '@/lib/utils';
 
 const TONNE_KG = 1000;
+
+// Canonical value -> label maps, kept in step with the field app's
+// mobile/src/core/api/domainConstants.ts so a farmer's soil type reads the same
+// in the dashboard as in the app that captured it. The API returns the stored
+// value (snake_case); an unknown value falls through to `cap()` rather than
+// being replaced with an invented label, because soil_type and water_source are
+// free TEXT server-side (the validator accepts any label so a slightly
+// different option never 422s a farmer onboarding).
+const SOIL_LABELS = {
+  sandy: 'Sandy',
+  lateritic_red_brown: 'Lateritic (Red/Brown)',
+  forest: 'Forest',
+  alluvial: 'Alluvial',
+  hydromorphic_fadama: 'Hydromorphic (Fadama)',
+};
+const WATER_LABELS = {
+  rain_fed: 'Rain-fed',
+  river_stream: 'River / Stream',
+  well: 'Well',
+  borehole: 'Borehole',
+  artificial_irrigation: 'Irrigation Canal',
+  dam_reservoir: 'Dam / Reservoir',
+  pond: 'Pond',
+  other: 'Other',
+};
+const PRICE_CONTEXT_LABELS = {
+  distress: 'Distress',
+  market: 'Market',
+  confirmed: 'Confirmed',
+  pre_agreed: 'Pre-agreed',
+};
 
 export default function PartnerCreditReportPage({ type }) {
   const params = useParams();
   const navigate = useNavigate();
   const id = type === 'farmer' ? params.farmerId : params.cooperativeId;
 
-  const { data: report, isLoading } = useQuery({
+  const { data: report, isLoading, isError, error } = useQuery({
     queryKey: ['partner-report', type, id],
     queryFn: () => api.get(`/partner/credit/${type === 'farmer' ? 'farmers' : 'cooperatives'}/${id}/report`),
+    enabled: !!id,
   });
 
   if (isLoading) return <Skeleton className="h-64" />;
-  if (!report) return <Card padded><p className="py-12 text-center">Report not available.</p></Card>;
+  // FIXED — a load failure rendered a bare "Report not available." with no
+  // reason and no way back, and the farmer branch then dereferenced
+  // report.subject on a partial response.
+  const missing = type === 'farmer' ? !report?.subject : !report?.cooperative;
+  if (isError || missing) {
+    return (
+      <Card padded>
+        <p className="py-10 text-center text-smoke">
+          {isError
+            ? `Could not load this credit report${error?.message ? `: ${error.message}` : ''}.`
+            : 'This credit report is not available to your organization.'}
+        </p>
+        <div className="flex justify-center">
+          <Button variant="secondary" onClick={() => navigate(-1)}>Go back</Button>
+        </div>
+      </Card>
+    );
+  }
 
   return type === 'farmer'
     ? <FarmerProfile report={report} onBack={() => navigate(-1)} />
@@ -37,32 +86,39 @@ export default function PartnerCreditReportPage({ type }) {
  * FARMER PROFILE — rich, tabbed (design: Heabron_FarmerProfile_DesignFlow)
  * =========================================================================== */
 export function FarmerProfile({ report, onBack, extraActions, backLabel = 'All farmers' }) {
-  const f = report.subject || {};
+  const f = report?.subject || {};
   const farm = Array.isArray(f.farm_profiles) ? f.farm_profiles[0] : f.farm_profiles;
-  const score = report.score || {};
+  const score = report?.score || {};
   const tier = score.credit_tier;
 
-  const finishedLoans = (report.financingHistory || []).filter((l) => ['disbursed', 'completed'].includes(l.status));
-  const totalDisbursed = (report.financingHistory || []).reduce((s, l) => s + Number(l.disbursed_amount || 0), 0);
-  const totalRepaid = (report.repaymentHistory || []).reduce((s, r) => s + Number(r.amount_paid || 0), 0);
+  const loans = Array.isArray(report?.financingHistory) ? report.financingHistory : [];
+  // FIXED — repaymentHistory already excludes voided rows server-side, but the
+  // filter is cheap and makes the intent explicit if that ever changes.
+  const repayments = (Array.isArray(report?.repaymentHistory) ? report.repaymentHistory : []).filter((r) => !r.voided);
+
+  const finishedLoans = loans.filter((l) => ['disbursed', 'completed'].includes(l.status));
+  // FIXED — money was summed with float addition over NUMERIC(12,2) values,
+  // which drifts (e.g. 150000.00000000003). sumAmounts accumulates in kobo.
+  const totalDisbursed = sumAmounts(loans, 'disbursed_amount');
+  const totalRepaid = sumAmounts(repayments, 'amount_paid');
   const repaymentRate = totalDisbursed > 0 ? Math.round((totalRepaid / totalDisbursed) * 100) : null;
 
   const [tab, setTab] = useState('cycles');
 
   return (
     <>
-      <button onClick={onBack} className="mb-4 inline-flex items-center gap-2 text-sm text-smoke hover:text-ink">
+      <button type="button" onClick={onBack} className="mb-4 inline-flex items-center gap-2 text-sm text-smoke hover:text-ink">
         <ArrowLeft className="size-4" /> {backLabel}
       </button>
 
       <PageHeader
         eyebrow="Borrower profile"
-        title={f.full_name}
-        description={`${f.cooperatives?.name || 'Independent'} · ${[f.lga, f.state].filter(Boolean).join(', ')}`}
-        actions={<>{extraActions}<Button variant="secondary" onClick={() => window.print()}><Download className="size-4" /> Export PDF</Button></>}
+        title={f.full_name || 'Farmer'}
+        description={[f.cooperatives?.name || 'Independent', [f.lga, f.state].filter(Boolean).join(', ')].filter(Boolean).join(' · ')}
+        actions={<>{extraActions}<Button variant="secondary" className="no-print" onClick={() => window.print()}><Download className="size-4" /> Export PDF</Button></>}
       />
 
-      {(report.riskFlags?.length || 0) > 0 && (
+      {(report?.riskFlags?.length || 0) > 0 && (
         <Card padded className="bg-red-50 border-red-200 mb-6">
           <div className="flex items-start gap-3">
             <AlertTriangle className="size-5 text-red-600 mt-0.5" />
@@ -101,7 +157,17 @@ export function FarmerProfile({ report, onBack, extraActions, backLabel = 'All f
             </div>
             <dl className="text-sm divide-y divide-whisper/50">
               <Row label="NIN verified" value={<VerifyMark ok={f.nin_verification_status === 'verified'} pending={f.nin_verification_status === 'pending'} />} />
-              <Row label="BVN linked" value={<VerifyMark ok={f.bvn_verification_status === 'verified'} pending={f.bvn_verification_status === 'pending'} label="Linked" />} />
+              {/* bvn_verification_status defaults to 'pending' for every
+                  farmer, so this row claimed "Pending" even when no BVN was
+                  ever collected. Show whether one is on file first. */}
+              <Row
+                label="BVN linked"
+                value={
+                  f.bvn
+                    ? <VerifyMark ok={f.bvn_verification_status === 'verified'} pending={f.bvn_verification_status === 'pending'} label="Linked" />
+                    : <span className="text-smoke">Not provided</span>
+                }
+              />
               <Row label="Phone" value={maskPhone(f.phone)} />
               <Row label="Gender" value={cap(f.gender)} />
               <Row label="Age" value={ageFromDob(f.date_of_birth)} />
@@ -116,13 +182,17 @@ export function FarmerProfile({ report, onBack, extraActions, backLabel = 'All f
           <Card>
             <h3 className="font-semibold text-ink mb-3 flex items-center gap-2"><Sprout className="size-4 text-forest-500" /> Farm details</h3>
             <dl className="text-sm divide-y divide-whisper/50">
-              <Row label="Total acreage" value={farm?.farm_size_acres ? `${farm.farm_size_acres} acres` : '—'} />
+              <Row label="Total acreage" value={farm?.farm_size_acres ? `${formatScore(farm.farm_size_acres, 2)} acres` : '—'} />
               <Row label="Primary crop" value={cap(farm?.crop_type) || cap(f.cooperatives?.primary_crop)} />
               <Row label="Secondary crops" value={(farm?.secondary_crops || []).map(cap).join(', ') || '—'} />
               <Row label="GPS mapped" value={<VerifyMark ok={!!farm?.gps_mapped} label="Mapped" />} />
               <Row label="Plot count" value={farm?.plot_count ? `${farm.plot_count} plot${farm.plot_count > 1 ? 's' : ''}` : '—'} />
-              <Row label="Soil type" value={cap(farm?.soil_type)} />
-              <Row label="Water source" value={cap(farm?.water_source)} />
+              {/* FIXED — printed the stored value verbatim, so
+                  'hydromorphic_fadama' / 'rain_fed' leaked to the screen.
+                  Mapped value -> label, falling back to a title-cased value
+                  because these two columns are free text server-side. */}
+              <Row label="Soil type" value={SOIL_LABELS[farm?.soil_type] || cap(farm?.soil_type)} />
+              <Row label="Water source" value={WATER_LABELS[farm?.water_source] || cap(farm?.water_source)} />
             </dl>
             <div className="mt-4 rounded-xl overflow-hidden border border-whisper bg-bone/60">
               {farm?.gps_lat && farm?.gps_lng ? (
@@ -144,10 +214,9 @@ export function FarmerProfile({ report, onBack, extraActions, backLabel = 'All f
             <div className="flex flex-wrap gap-2">
               <QualityChip ok={f.nin_verification_status === 'verified'} label="NIN verified" />
               <QualityChip ok={!!farm?.gps_mapped} label="GPS mapped" />
-              <QualityChip ok={(report.seasonalProductions || []).some((p) => p.verification_status === 'verified')} label="Yield verified" />
+              <QualityChip ok={(Array.isArray(report?.seasonalProductions) ? report.seasonalProductions : []).some((p) => p.verification_status === 'verified')} label="Yield verified" />
               <QualityChip ok={finishedLoans.length > 0} label={`${finishedLoans.length} cycles done`} />
               <span className="pill-neutral text-[11px]">Updated: {formatDate(f.updated_at)}</span>
-              <span className="pill-neutral text-[11px]">Source: Field agent</span>
             </div>
           </Card>
         </div>
@@ -173,7 +242,7 @@ export function FarmerProfile({ report, onBack, extraActions, backLabel = 'All f
                 ['market', 'Market access'],
                 ['notes', 'Field notes'],
               ].map(([key, label]) => (
-                <button
+                <button type="button"
                   key={key}
                   onClick={() => setTab(key)}
                   className={`px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
@@ -185,10 +254,10 @@ export function FarmerProfile({ report, onBack, extraActions, backLabel = 'All f
               ))}
             </div>
             <div className="p-5">
-              {tab === 'cycles' && <CyclesTab loans={report.financingHistory || []} repayments={report.repaymentHistory || []} />}
-              {tab === 'yield' && <YieldTab productions={report.seasonalProductions || []} />}
-              {tab === 'market' && <MarketTab records={report.marketAccess || []} />}
-              {tab === 'notes' && <NotesTab notes={report.fieldNotes || []} />}
+              {tab === 'cycles' && <CyclesTab loans={loans} repayments={repayments} />}
+              {tab === 'yield' && <YieldTab productions={Array.isArray(report?.seasonalProductions) ? report.seasonalProductions : []} />}
+              {tab === 'market' && <MarketTab records={Array.isArray(report?.marketAccess) ? report.marketAccess : []} />}
+              {tab === 'notes' && <NotesTab notes={Array.isArray(report?.fieldNotes) ? report.fieldNotes : []} />}
             </div>
           </Card>
         </div>
@@ -198,11 +267,15 @@ export function FarmerProfile({ report, onBack, extraActions, backLabel = 'All f
 }
 
 /* ---------- score card (Yield 60 / Repayment 40) ---------- */
-function CreditScoreCard({ score }) {
+function CreditScoreCard({ score = {} }) {
+  // FIXED — an unscored farmer has no credit_scores row at all, so this card
+  // drew a confident "0 out of 100" ring. Distinguish "no score yet" from a
+  // genuine zero.
+  const hasScore = score.final_credit_score != null && Number.isFinite(Number(score.final_credit_score));
   const final = Number(score.final_credit_score || 0);
   const yieldPts = Number(score.production_score || 0);
   const repayPts = Number(score.repayment_score || 0);
-  const pct = Math.min(final, 100);
+  const pct = Math.max(0, Math.min(final, 100));
   const dash = 2 * Math.PI * 42;
   return (
     <Card>
@@ -216,7 +289,7 @@ function CreditScoreCard({ score }) {
           </svg>
           <div className="absolute inset-0 grid place-items-center text-center">
             <div>
-              <div className="font-display text-2xl font-bold text-forest-700 leading-none">{final.toFixed(0)}</div>
+              <div className="font-display text-2xl font-bold text-forest-700 leading-none">{hasScore ? final.toFixed(0) : '—'}</div>
               <div className="text-[9px] text-smoke">out of 100</div>
             </div>
           </div>
@@ -232,13 +305,13 @@ function CreditScoreCard({ score }) {
         </div>
       </div>
       <p className="mt-3 text-sm font-semibold text-forest-700">
-        {tierLabel(score.credit_tier)}{score.is_first_cycle ? ' · First cycle' : ''}
+        {hasScore ? tierLabel(score.credit_tier) : 'Not yet scored'}{score.is_first_cycle ? ' · First cycle' : ''}
       </p>
     </Card>
   );
 }
 
-function FinancingSummaryCard({ totalDisbursed, totalRepaid, repaymentRate, cyclesCompleted, score }) {
+function FinancingSummaryCard({ totalDisbursed, totalRepaid, repaymentRate, cyclesCompleted, score = {} }) {
   return (
     <Card>
       <p className="eyebrow mb-1">Financing summary</p>
@@ -248,7 +321,7 @@ function FinancingSummaryCard({ totalDisbursed, totalRepaid, repaymentRate, cycl
         <StatBox label="Repayment rate" value={repaymentRate != null ? `${repaymentRate}%` : '—'} tone={repaymentRate === 100 ? 'green' : 'default'} />
         <StatBox label="Cycles completed" value={formatNumber(cyclesCompleted)} />
       </div>
-      {(score.recommended_loan_max || 0) > 0 && (
+      {Number(score.recommended_loan_max || 0) > 0 && (
         <div className="mt-3 rounded-xl bg-forest-50 border border-forest-100 p-3">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-forest-700 flex items-center gap-1.5">
             <Wallet className="size-3.5" /> Recommended loan limit
@@ -264,10 +337,12 @@ function FinancingSummaryCard({ totalDisbursed, totalRepaid, repaymentRate, cycl
 }
 
 /* ---------- tabs ---------- */
-function CyclesTab({ loans, repayments }) {
+function CyclesTab({ loans = [], repayments = [] }) {
   if (loans.length === 0) return <Empty>No financing cycles yet.</Empty>;
+  // Sum in integer kobo so repeated additions of NUMERIC(12,2) don't drift.
   const repaidByLoan = repayments.reduce((m, r) => {
-    m[r.financing_request_id] = (m[r.financing_request_id] || 0) + Number(r.amount_paid || 0);
+    const kobo = Math.round((Number(r.amount_paid) || 0) * 100);
+    m[r.financing_request_id] = (m[r.financing_request_id] || 0) + kobo;
     return m;
   }, {});
   return (
@@ -280,7 +355,7 @@ function CyclesTab({ loans, repayments }) {
         <tbody>
           {loans.slice().reverse().map((l, i) => {
             const disbursed = Number(l.disbursed_amount || l.approved_amount || 0);
-            const repaid = repaidByLoan[l.id] || 0;
+            const repaid = (repaidByLoan[l.id] || 0) / 100;
             const rate = disbursed > 0 ? Math.round((repaid / disbursed) * 100) : 0;
             return (
               <tr key={l.id} className="border-b border-whisper/40 last:border-0">
@@ -299,14 +374,22 @@ function CyclesTab({ loans, repayments }) {
   );
 }
 
-function YieldTab({ productions }) {
+function YieldTab({ productions = [] }) {
   if (productions.length === 0) return <Empty>No seasonal yield records yet.</Empty>;
   const withYield = productions.filter((p) => p.actual_yield_tonnes != null);
-  const maxKg = Math.max(...withYield.map((p) => Number(p.actual_yield_tonnes) * TONNE_KG), 1);
+  // FIXED — `Math.max(...list, 1)` spread an unbounded array (a farmer with
+  // hundreds of seasons can blow the argument limit) and a NaN entry poisoned
+  // the max, making every bar width NaN%. Reduce and filter instead.
+  const maxKg = withYield.reduce((max, p) => {
+    const kg = Number(p.actual_yield_tonnes) * TONNE_KG;
+    return Number.isFinite(kg) && kg > max ? kg : max;
+  }, 1);
   const avgAch = withYield.length
     ? (withYield.reduce((s, p) => s + (Number(p.yield_achievement_rate) || 0), 0) / withYield.length) * 100
     : null;
-  const latest = productions[productions.length - 1];
+  // The API orders seasons newest-first (expected_harvest_date desc), so the
+  // "latest season" is the FIRST row, not the last.
+  const latest = productions[0];
   return (
     <div className="grid md:grid-cols-2 gap-6">
       <div>
@@ -321,7 +404,7 @@ function YieldTab({ productions }) {
                   <span className="tabular text-smoke">{p.actual_yield_tonnes != null ? `${formatNumber(kg)} kg` : 'pending'}</span>
                 </div>
                 <div className="h-2.5 bg-bone rounded-full overflow-hidden">
-                  <div className="h-full bg-forest-500" style={{ width: `${(kg / maxKg) * 100}%` }} />
+                  <div className="h-full bg-forest-500" style={{ width: `${Math.max(0, Math.min(100, (kg / maxKg) * 100))}%` }} />
                 </div>
               </div>
             );
@@ -329,7 +412,7 @@ function YieldTab({ productions }) {
         </div>
         <div className="mt-4 rounded-xl bg-bone/70 p-3 text-sm space-y-1">
           <KV label="Seasons reported" value={withYield.length} />
-          <KV label="Avg achievement" value={avgAch != null ? `${avgAch.toFixed(0)}%` : '—'} tone={avgAch >= 90 ? 'green' : 'default'} />
+          <KV label="Avg achievement" value={avgAch != null ? `${avgAch.toFixed(0)}%` : '—'} tone={avgAch != null && avgAch >= 90 ? 'green' : 'default'} />
           <KV label="Verified seasons" value={productions.filter((p) => p.verification_status === 'verified').length} />
         </div>
       </div>
@@ -342,7 +425,7 @@ function YieldTab({ productions }) {
             <Row label="Fertilizer" value={latest.fertilizer_used || '—'} />
             <Row label="Herbicide" value={latest.herbicide_used == null ? '—' : latest.herbicide_used ? 'Yes' : 'No'} />
             <Row label="Post-harvest storage" value={latest.post_harvest_storage || '—'} />
-            <Row label="Est. farm income" value={latest.estimated_farm_income ? formatNaira(latest.estimated_farm_income) : '—'} />
+            <Row label="Est. farm income" value={latest.estimated_farm_income != null ? formatNaira(latest.estimated_farm_income) : '—'} />
             <Row label="Verification" value={<StatusPill status={latest.verification_status} />} />
           </dl>
         )}
@@ -380,7 +463,7 @@ function EvidenceGallery({ production }) {
   );
 }
 
-function MarketTab({ records }) {
+function MarketTab({ records = [] }) {
   if (records.length === 0) return <Empty>No offtake history recorded yet.</Empty>;
   return (
     <div className="overflow-x-auto">
@@ -393,9 +476,11 @@ function MarketTab({ records }) {
           {records.map((m) => (
             <tr key={m.id} className="border-b border-whisper/40 last:border-0">
               <td className="py-2.5 pr-4 font-medium">{m.season_year || '—'}</td>
-              <td className="py-2.5 pr-4">{m.buyer_name}</td>
-              <td className="py-2.5 pr-4 font-semibold">{m.price_per_ton ? formatNaira(m.price_per_ton) : '—'}</td>
-              <td className="py-2.5 pr-4 capitalize text-smoke">{(m.price_context || '').replace('_', ' ') || '—'}</td>
+              <td className="py-2.5 pr-4">{m.buyer_name || '—'}</td>
+              <td className="py-2.5 pr-4 font-semibold">{m.price_per_ton != null ? formatNaira(m.price_per_ton) : '—'}</td>
+              {/* FIXED — printed the raw enum, and only replaced the first
+                  underscore ('pre_agreed' -> 'pre agreed'). */}
+              <td className="py-2.5 pr-4 text-smoke">{PRICE_CONTEXT_LABELS[m.price_context] || cap(m.price_context) || '—'}</td>
               <td className="py-2.5 pr-4">{m.is_confirmed ? <span className="text-forest-600 font-medium">✓ Yes</span> : '—'}</td>
             </tr>
           ))}
@@ -405,17 +490,28 @@ function MarketTab({ records }) {
   );
 }
 
-function NotesTab({ notes }) {
+function NotesTab({ notes = [] }) {
   if (notes.length === 0) return <Empty>No field notes yet.</Empty>;
   return (
     <ol className="relative border-l-2 border-whisper/70 ml-2 space-y-5">
       {notes.map((n) => (
         <li key={n.id} className="ml-5 relative">
-          <span className={`absolute -left-[27px] top-1 size-3 rounded-full ${n.tag_variant === 'amber' ? 'bg-gold-500' : 'bg-forest-500'}`} />
+          {/* FIXED — these used bg-gold-500 / bg-gold-50 / text-gold-700, but
+              there is no `gold` colour in tailwind.config.js (the accent scale
+              is `harvest`). Tailwind emitted nothing for them, so an "amber"
+              field note rendered with no dot colour and an unstyled tag.
+              field_notes.tag_variant is 'green' | 'amber' | 'neutral'. */}
+          <span className={`absolute -left-[27px] top-1 size-3 rounded-full ${
+            n.tag_variant === 'amber' ? 'bg-harvest-400' : n.tag_variant === 'neutral' ? 'bg-smoke' : 'bg-forest-500'
+          }`} />
           <div className="flex items-center gap-2 flex-wrap">
             <p className="font-semibold text-ink text-sm">{n.title || cap(n.note_type)}</p>
             {n.tag_label && (
-              <span className={`text-[11px] px-2 py-0.5 rounded-full ${n.tag_variant === 'amber' ? 'bg-gold-50 text-gold-700' : 'bg-forest-50 text-forest-700'}`}>{n.tag_label}</span>
+              <span className={`text-[11px] px-2 py-0.5 rounded-full ${
+                n.tag_variant === 'amber' ? 'bg-harvest-50 text-harvest-700'
+                  : n.tag_variant === 'neutral' ? 'bg-bone text-smoke'
+                  : 'bg-forest-50 text-forest-700'
+              }`}>{n.tag_label}</span>
             )}
           </div>
           <p className="text-[11px] text-smoke">{formatDate(n.event_date)}</p>
@@ -446,7 +542,9 @@ function KV({ label, value, tone }) {
 function MiniStat({ label, value }) {
   return (
     <div className="rounded-lg bg-bone/70 py-1.5 text-center">
-      <div className="font-semibold text-ink text-sm tabular">{value != null ? Number(value).toFixed(0) : '0'}</div>
+      {/* FIXED — printed a hard "0" for a missing sub-score, which reads as a
+          real zero rather than "no data". */}
+      <div className="font-semibold text-ink text-sm tabular">{formatScore(value, 0)}</div>
       <div className="text-[10px] text-smoke">{label}</div>
     </div>
   );
@@ -461,7 +559,7 @@ function StatBox({ label, value, tone }) {
 }
 function VerifyMark({ ok, pending, label }) {
   if (ok) return <span className="text-forest-600 font-medium inline-flex items-center gap-1"><CheckCircle2 className="size-3.5" /> {label || 'Verified'}</span>;
-  if (pending) return <span className="text-gold-700 inline-flex items-center gap-1"><Clock className="size-3.5" /> Pending</span>;
+  if (pending) return <span className="text-harvest-700 inline-flex items-center gap-1"><Clock className="size-3.5" /> Pending</span>;
   return <span className="text-smoke">—</span>;
 }
 function QualityChip({ ok, label }) {
@@ -490,15 +588,17 @@ function Empty({ children }) {
   return <p className="text-sm text-smoke py-8 text-center">{children}</p>;
 }
 function cap(s) {
-  if (!s) return '';
+  if (s === null || s === undefined || s === '') return '';
   return String(s).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 function tierLabel(t) {
   return { A: 'Excellent — Tier A', B: 'Good — Tier B', C: 'Moderate — Tier C', D: 'At risk — Tier D' }[t] || 'Unscored';
 }
 function maskPhone(p) {
+  // FIXED — assumed a string; a numeric phone from an import threw on .slice.
   if (!p) return '—';
-  return p.length > 6 ? `${p.slice(0, 6)} *** ${p.slice(-4)}` : p;
+  const s = String(p);
+  return s.length > 6 ? `${s.slice(0, 6)} *** ${s.slice(-4)}` : s;
 }
 function ageFromDob(dob) {
   if (!dob) return '—';
@@ -516,23 +616,31 @@ function ageFromDob(dob) {
  * =========================================================================== */
 function CooperativeReport({ report, onBack }) {
   const navigate = useNavigate();
-  const c = report.cooperative;
-  const score = report.score;
-  const trend = (report.scoreTrend || []).map((h, i) => ({ idx: i + 1, score: Number(h.final_score) }));
+  const c = report?.cooperative || {};
+  const score = report?.score;
+  const members = Array.isArray(report?.members) ? report.members : [];
+  // Drop non-numeric points — a null final_score produced a NaN datum that
+  // silently broke the whole recharts line.
+  const trend = (Array.isArray(report?.scoreTrend) ? report.scoreTrend : [])
+    .map((h, i) => ({ idx: i + 1, score: Number(h.final_score) }))
+    .filter((p) => Number.isFinite(p.score));
 
   return (
     <>
-      <button onClick={onBack} className="mb-4 inline-flex items-center gap-2 text-sm text-smoke hover:text-ink">
+      <button type="button" onClick={onBack} className="mb-4 inline-flex items-center gap-2 text-sm text-smoke hover:text-ink">
         <ArrowLeft className="size-4" /> Back
       </button>
       <PageHeader
         eyebrow="Cooperative credit report"
-        title={c.name}
+        title={c.name || 'Cooperative'}
         description={[c.lga, c.state].filter(Boolean).join(', ')}
-        actions={<Button variant="secondary" onClick={() => window.print()}><Download className="size-4" /> Print / PDF</Button>}
+        actions={<Button variant="secondary" className="no-print" onClick={() => window.print()}><Download className="size-4" /> Print / PDF</Button>}
       />
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <MetricCard label="Average score" value={score?.average_score?.toFixed(1) || '—'} sub={score?.cooperative_tier ? `Tier ${score.cooperative_tier}` : ''} tone="primary" />
+        {/* FIXED — `score.average_score.toFixed(1)` threw when Postgres
+            returned the NUMERIC as a string, and `|| '—'` turned a real 0 into
+            an em-dash. */}
+        <MetricCard label="Average score" value={formatScore(score?.average_score)} sub={score?.cooperative_tier ? `Tier ${score.cooperative_tier}` : 'Unscored'} tone="primary" />
         <MetricCard label="Total members" value={formatNumber(score?.total_farmers || 0)} />
         <MetricCard label="Scored members" value={formatNumber(score?.scored_farmers || 0)} />
         <MetricCard label="Tier D" value={formatNumber(score?.tier_d_count || 0)} sub="At-risk members" />
@@ -570,7 +678,12 @@ function CooperativeReport({ report, onBack }) {
       <Card padded className="mb-6">
         <p className="eyebrow mb-1">Members</p>
         <h3 className="font-display text-xl font-semibold mb-1">Cooperative members</h3>
-        <p className="text-sm text-smoke mb-4">Tap any member to open their full borrower profile.</p>
+        <p className="text-sm text-smoke mb-4">
+          {members.length === 0
+            ? 'No farmers are registered to this cooperative yet.'
+            : `${formatNumber(members.length)} member${members.length === 1 ? '' : 's'} — select any row to open their full borrower profile.`}
+          {members.length > 100 && ' Showing the first 100.'}
+        </p>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr className="text-left text-xs uppercase text-smoke border-b border-whisper/60">
@@ -578,14 +691,19 @@ function CooperativeReport({ report, onBack }) {
               <th className="py-2 px-3">NIN</th><th className="py-2 px-3">Tier</th><th className="py-2 px-3">Score</th><th className="py-2 px-3"></th>
             </tr></thead>
             <tbody>
-              {(report.members || []).slice(0, 100).map((m) => {
+              {members.slice(0, 100).map((m) => {
                 const s = Array.isArray(m.credit_scores) ? m.credit_scores[0] : m.credit_scores;
                 const farm = Array.isArray(m.farm_profiles) ? m.farm_profiles[0] : m.farm_profiles;
                 return (
                   <tr
                     key={m.id}
                     onClick={() => navigate(`/partner/reports/farmer/${m.id}`)}
-                    className="border-b border-whisper/40 last:border-0 hover:bg-bone/50 cursor-pointer transition-colors"
+                    tabIndex={0}
+                    role="button"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/partner/reports/farmer/${m.id}`); }
+                    }}
+                    className="border-b border-whisper/40 last:border-0 hover:bg-bone/50 cursor-pointer transition-colors focus-visible:outline-none focus-visible:bg-bone"
                   >
                     <td className="py-2.5 px-3">
                       <div className="flex items-center gap-2.5">
@@ -599,11 +717,14 @@ function CooperativeReport({ report, onBack }) {
                       </div>
                     </td>
                     <td className="py-2.5 px-3 capitalize">{farm?.crop_type || '—'}</td>
-                    <td className="py-2.5 px-3">{farm?.farm_size_acres ? `${farm.farm_size_acres} ac` : '—'}</td>
+                    <td className="py-2.5 px-3">{farm?.farm_size_acres ? `${formatScore(farm.farm_size_acres, 2)} ac` : '—'}</td>
                     <td className="py-2.5 px-3"><StatusPill status={m.nin_verification_status || 'pending'} /></td>
                     <td className="py-2.5 px-3"><TierPill tier={s?.credit_tier} /></td>
-                    <td className="py-2.5 px-3 tabular font-semibold">{s?.final_credit_score != null ? Number(s.final_credit_score).toFixed(0) : '—'}</td>
-                    <td className="py-2.5 px-3 text-right"><ChevronRight className="size-4 text-smoke inline" /></td>
+                    <td className="py-2.5 px-3 tabular font-semibold">{formatScore(s?.final_credit_score, 0)}</td>
+                    <td className="py-2.5 px-3 text-right">
+                      <ChevronRight className="size-4 text-smoke inline" aria-hidden="true" />
+                      <span className="sr-only">Open borrower profile</span>
+                    </td>
                   </tr>
                 );
               })}

@@ -1,14 +1,19 @@
 'use strict';
 
 const { supabaseAdmin } = require('../config/supabase');
-const { ok, created, notFound, forbidden, badRequest, paginated } = require('../utils/response');
+const { ok, created, notFound, forbidden, badRequest, conflict, paginated } = require('../utils/response');
 const { parsePagination } = require('../utils/pagination');
 const { logActivity } = require('../utils/activity');
 const { safeRecalculateFarmer } = require('../services/credit-score');
 const email = require('../services/email');
+const { getProfileFor, getUsersWithRoles } = require('../utils/profiles');
+const { ADMIN_ROLES } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
 const ENTITY_TABLE = { farmer: 'farmers', cooperative: 'cooperatives', farm_profile: 'farm_profiles' };
+
+/** Human-readable column per entity type, for the review queue. */
+const NAME_COLUMN = { farmer: 'full_name', cooperative: 'name', farm_profile: 'id' };
 
 // Whitelist of camelCase -> snake_case columns an agent may propose to change,
 // per entity. Anything outside this list is ignored (protected fields like NIN,
@@ -49,12 +54,33 @@ async function create(req, res) {
   const table = ENTITY_TABLE[entityType];
   if (!table) return badRequest(res, 'Invalid entityType');
 
-  // Confirm the entity exists and the agent owns it (for farmer/coop).
-  const { data: entity } = await sb.from(table).select('*').eq('id', entityId).maybeSingle();
+  // Confirm the entity exists and the agent owns it.
+  const { data: entity, error: entityErr } = await sb.from(table).select('*').eq('id', entityId).maybeSingle();
+  if (entityErr) throw entityErr;
   if (!entity) return notFound(res, `${entityType} not found`);
+
   if (req.user.role === 'field_agent') {
-    const ownerField = entityType === 'farm_profile' ? null : 'created_by_agent_id';
-    if (ownerField && entity[ownerField] && entity[ownerField] !== req.user.userId) return forbidden(res);
+    if (entityType === 'farm_profile') {
+      // FIXED — `farm_profiles` has no `created_by_agent_id`, so the old code
+      // set `ownerField = null` and skipped the check ENTIRELY: any field
+      // agent could submit a change request against ANY farmer's farm profile
+      // by id, and an admin approving it in good faith would apply a stranger's
+      // edit (farm size, crop type — the inputs to the credit score) to
+      // another agent's farmer. Ownership is resolved through the parent.
+      const { data: owner, error: ownerErr } = await sb
+        .from('farm_profiles')
+        .select('farmer_id, farmers(created_by_agent_id)')
+        .eq('id', entityId)
+        .maybeSingle();
+      if (ownerErr) throw ownerErr;
+      if (!owner) return notFound(res, 'farm_profile not found');
+      if (owner.farmers?.created_by_agent_id !== req.user.userId) return forbidden(res);
+    } else if (entity.created_by_agent_id !== req.user.userId) {
+      // FIXED — the old condition was `entity[f] && entity[f] !== userId`, so
+      // a row with a NULL `created_by_agent_id` (any legacy or imported
+      // record) passed the check for EVERY agent.
+      return forbidden(res);
+    }
   }
 
   const mapped = mapChanges(entityType, proposedChanges);
@@ -76,15 +102,23 @@ async function create(req, res) {
   if (error) throw error;
 
   // Notify admins there is a pending change to review.
-  const { data: admins } = await sb.from('user_roles').select('user_id').in('role', ['super_admin', 'ops_admin']);
-  if (admins?.length) {
-    await sb.from('notifications').insert(admins.map((a) => ({
-      user_id: a.user_id,
-      type: 'change_request_submitted',
-      title: 'New change submitted',
-      message: `A field agent submitted a change to a ${entityType.replace('_', ' ')}`,
-      metadata: { changeRequestId: data.id, entityType, entityId },
-    })));
+  // FIXED — the insert's error was discarded, and the role list was
+  // ['super_admin','ops_admin'], excluding finance_admin unlike every other
+  // admin broadcast in the codebase.
+  try {
+    const admins = await getUsersWithRoles(sb, ADMIN_ROLES);
+    if (admins.length) {
+      const { error: notifyErr } = await sb.from('notifications').insert(admins.map((a) => ({
+        user_id: a.userId,
+        type: 'change_request_submitted',
+        title: 'New change submitted',
+        message: `${req.user.fullName || 'A field agent'} submitted a change to a ${entityType.replace('_', ' ')}`,
+        metadata: { changeRequestId: data.id, entityType, entityId },
+      })));
+      if (notifyErr) throw notifyErr;
+    }
+  } catch (e) {
+    logger.warn({ err: e.message, code: e.code }, 'change request admin notification failed');
   }
 
   await logActivity({ actor: req.user, action: 'change_request_submitted', entityType: 'change_request', entityId: data.id, req });
@@ -108,18 +142,39 @@ async function list(req, res) {
   const submitterIds = [...new Set(rows.map((r) => r.submitted_by_agent_id).filter(Boolean))];
   let profiles = new Map();
   if (submitterIds.length) {
-    const { data: ps } = await sb.from('profiles').select('user_id, full_name').in('user_id', submitterIds);
+    const { data: ps, error: psErr } = await sb
+      .from('profiles')
+      .select('user_id, full_name')
+      .in('user_id', submitterIds);
+    if (psErr) throw psErr;
     profiles = new Map((ps || []).map((p) => [p.user_id, p.full_name]));
   }
-  const enriched = await Promise.all(rows.map(async (r) => {
-    const table = ENTITY_TABLE[r.entity_type];
-    let entityName = null;
-    if (table && r.entity_id) {
-      const nameCol = r.entity_type === 'cooperative' ? 'name' : r.entity_type === 'farm_profile' ? 'id' : 'full_name';
-      const { data: e } = await sb.from(table).select(nameCol).eq('id', r.entity_id).maybeSingle();
-      entityName = e ? e[nameCol] : null;
-    }
-    return { ...r, entity_name: entityName, submitted_by_name: profiles.get(r.submitted_by_agent_id) || null };
+  // FIXED — N+1. This issued ONE QUERY PER ROW to resolve the entity name
+  // (20 extra round trips for a default page, each with its error discarded).
+  // The ids are grouped by table and fetched in one query per table instead —
+  // at most three, regardless of page size.
+  const idsByType = new Map();
+  for (const r of rows) {
+    if (!ENTITY_TABLE[r.entity_type] || !r.entity_id) continue;
+    if (!idsByType.has(r.entity_type)) idsByType.set(r.entity_type, new Set());
+    idsByType.get(r.entity_type).add(r.entity_id);
+  }
+
+  const namesByType = new Map();
+  for (const [entityType, idSet] of idsByType) {
+    const nameCol = NAME_COLUMN[entityType];
+    const { data: entities, error: entErr } = await sb
+      .from(ENTITY_TABLE[entityType])
+      .select(`id, ${nameCol}`)
+      .in('id', [...idSet]);
+    if (entErr) throw entErr;
+    namesByType.set(entityType, new Map((entities || []).map((e) => [e.id, e[nameCol]])));
+  }
+
+  const enriched = rows.map((r) => ({
+    ...r,
+    entity_name: namesByType.get(r.entity_type)?.get(r.entity_id) ?? null,
+    submitted_by_name: profiles.get(r.submitted_by_agent_id) || null,
   }));
 
   return paginated(res, enriched, { page, pageSize, total: count || 0 });
@@ -128,8 +183,13 @@ async function list(req, res) {
 // GET /change-requests/:changeRequestId
 async function getById(req, res) {
   const sb = supabaseAdmin();
-  const { data } = await sb.from('change_requests').select('*').eq('id', req.params.changeRequestId).maybeSingle();
-  if (!data) return notFound(res);
+  const { data, error } = await sb
+    .from('change_requests')
+    .select('*')
+    .eq('id', req.params.changeRequestId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return notFound(res, 'Change request not found');
   if (req.user.role === 'field_agent' && data.submitted_by_agent_id !== req.user.userId) return forbidden(res);
   return ok(res, data);
 }
@@ -138,41 +198,93 @@ async function getById(req, res) {
 async function decide(req, res) {
   const sb = supabaseAdmin();
   const { decision, reviewNotes } = req.body;
-  const { data: cr } = await sb.from('change_requests').select('*').eq('id', req.params.changeRequestId).maybeSingle();
-  if (!cr) return notFound(res);
-  if (cr.status !== 'pending') return badRequest(res, `Change request already ${cr.status}`);
+  const { data: cr, error: readErr } = await sb
+    .from('change_requests')
+    .select('*')
+    .eq('id', req.params.changeRequestId)
+    .maybeSingle();
+  if (readErr) throw readErr;
+  if (!cr) return notFound(res, 'Change request not found');
+  if (cr.status !== 'pending') {
+    return conflict(res, `This change request has already been ${cr.status}`, {
+      changeRequestId: cr.id,
+      currentStatus: cr.status,
+    });
+  }
+
+  const table = ENTITY_TABLE[cr.entity_type];
+  // FIXED — `ENTITY_TABLE[cr.entity_type]` was used without checking, so a row
+  // with an unrecognised `entity_type` reached `sb.from(undefined)`.
+  if (!table) return badRequest(res, `Unknown entityType on this change request: ${cr.entity_type}`);
 
   const approved = decision === 'approve';
   let applied = null;
 
-  if (approved) {
-    const table = ENTITY_TABLE[cr.entity_type];
-    if (cr.change_type === 'delete') {
-      await sb.from(table).delete().eq('id', cr.entity_id);
-    } else {
-      const patch = { ...cr.proposed_changes, updated_at: new Date().toISOString() };
-      const { data: updated, error } = await sb.from(table).update(patch).eq('id', cr.entity_id).select().maybeSingle();
-      if (error) throw error;
-      applied = updated;
-      // If a farm/farmer field that affects scoring changed, recalc.
-      const farmerId = cr.entity_type === 'farmer' ? cr.entity_id
-        : cr.entity_type === 'farm_profile' ? updated?.farmer_id : null;
-      if (farmerId) safeRecalculateFarmer(farmerId, { triggerReason: 'change_request_approved' });
-    }
+  // FIXED — the status was written AFTER the entity change with its own error
+  // discarded. If the entity update succeeded and the status write failed, the
+  // change was applied to live data while the request stayed `pending` — so an
+  // admin could approve it a second time and apply it twice. The request is now
+  // claimed FIRST, conditionally on still being pending, and rolled back if
+  // applying it fails.
+  const { data: claimed, error: claimErr } = await sb
+    .from('change_requests')
+    .update({
+      status: approved ? 'approved' : 'rejected',
+      reviewed_by_admin_id: req.user.userId,
+      reviewed_at: new Date().toISOString(),
+      review_notes: reviewNotes || null,
+    })
+    .eq('id', cr.id)
+    .eq('status', 'pending')
+    .select('id');
+  if (claimErr) throw claimErr;
+  if (!claimed || claimed.length === 0) {
+    return conflict(res, 'This change request was decided by someone else a moment ago', {
+      changeRequestId: cr.id,
+    });
   }
 
-  await sb.from('change_requests').update({
-    status: approved ? 'approved' : 'rejected',
-    reviewed_by_admin_id: req.user.userId,
-    reviewed_at: new Date().toISOString(),
-    review_notes: reviewNotes || null,
-  }).eq('id', cr.id);
+  if (approved) {
+    try {
+      if (cr.change_type === 'delete') {
+        const { error: delErr } = await sb.from(table).delete().eq('id', cr.entity_id);
+        if (delErr) throw delErr;
+      } else {
+        const patch = { ...cr.proposed_changes, updated_at: new Date().toISOString() };
+        const { data: updated, error } = await sb
+          .from(table)
+          .update(patch)
+          .eq('id', cr.entity_id)
+          .select()
+          .maybeSingle();
+        if (error) throw error;
+        applied = updated;
+        // If a farm/farmer field that affects scoring changed, recalc.
+        // FIXED — was fire-and-forget, so an approved farm-size change never
+        // reached the credit score on Vercel.
+        const farmerId = cr.entity_type === 'farmer' ? cr.entity_id
+          : cr.entity_type === 'farm_profile' ? updated?.farmer_id : null;
+        if (farmerId) await safeRecalculateFarmer(farmerId, { triggerReason: 'change_request_approved' });
+      }
+    } catch (applyErr) {
+      // Put the request back in the queue rather than marking it approved
+      // when the change was not in fact applied.
+      await sb
+        .from('change_requests')
+        .update({ status: 'pending', reviewed_by_admin_id: null, reviewed_at: null, review_notes: null })
+        .eq('id', cr.id);
+      logger.error(
+        { err: applyErr.message, code: applyErr.code, changeRequestId: cr.id, entityType: cr.entity_type },
+        'change request could not be applied — returned to pending'
+      );
+      throw applyErr;
+    }
+  }
 
   // Notify + email submitting agent
   if (cr.submitted_by_agent_id) {
     try {
-      const table = ENTITY_TABLE[cr.entity_type];
-      const nameCol = cr.entity_type === 'cooperative' ? 'name' : cr.entity_type === 'farm_profile' ? 'id' : 'full_name';
+      const nameCol = NAME_COLUMN[cr.entity_type];
       const { data: e } = await sb.from(table).select(nameCol).eq('id', cr.entity_id).maybeSingle();
       const entityName = e ? e[nameCol] : cr.entity_type;
       await sb.from('notifications').insert({
@@ -182,14 +294,18 @@ async function decide(req, res) {
         message: `Your update to ${entityName} was ${approved ? 'approved' : 'rejected'}`,
         metadata: { changeRequestId: cr.id },
       });
-      const { data: ap } = await sb.from('profiles').select('email, full_name').eq('user_id', cr.submitted_by_agent_id).maybeSingle();
+      const ap = await getProfileFor(sb, cr.submitted_by_agent_id);
       if (ap?.email) {
-        email.safe(email.sendChangeRequestDecision)(ap.email, {
+        // FIXED — fire-and-forget `email.safe(...)`: on Vercel the lambda is
+        // frozen when the response is written, so the agent was never told
+        // their change had been reviewed.
+        const result = await email.safe(email.sendChangeRequestDecision)(ap.email, {
           recipientName: ap.full_name,
           entityName,
           decision: approved ? 'approved' : 'rejected',
           reviewNotes,
         });
+        if (result?.error) logger.warn({ err: result.error, to: ap.email }, 'change request email rejected');
       }
     } catch (e) {
       logger.warn({ err: e.message }, 'change request decision notify failed');
@@ -197,7 +313,12 @@ async function decide(req, res) {
   }
 
   await logActivity({ actor: req.user, action: `change_request_${approved ? 'approved' : 'rejected'}`, entityType: 'change_request', entityId: cr.id, req });
-  const { data: updated } = await sb.from('change_requests').select('*').eq('id', cr.id).maybeSingle();
+  const { data: updated, error: reReadErr } = await sb
+    .from('change_requests')
+    .select('*')
+    .eq('id', cr.id)
+    .maybeSingle();
+  if (reReadErr) throw reReadErr;
   return ok(res, { ...updated, applied });
 }
 

@@ -41,6 +41,21 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*')
   .filter(Boolean);
 const allowAll = allowedOrigins.includes('*');
 
+// A deployment that allows every origin is almost never intended. This is not
+// fatal — authentication is Bearer-header only, so there is no cookie for
+// another origin to ride on, and failing closed here would take down a live
+// dashboard whose origin had simply never been configured. So it warns loudly
+// instead, and `.env.example` documents the variable.
+if (allowAll && config.isDeployed) {
+  logger.warn(
+    {
+      allowedOrigins,
+      hint: 'Set ALLOWED_ORIGINS to a comma-separated list of dashboard origins.',
+    },
+    'CORS is open to every origin on a deployed environment'
+  );
+}
+
 app.use(
   cors({
     origin: (origin, cb) => {
@@ -49,7 +64,14 @@ app.use(
       if (!origin) return cb(null, true);
       if (allowAll) return cb(null, origin); // echo back, NOT '*' — credentials require this
       if (allowedOrigins.includes(origin)) return cb(null, origin);
-      return cb(new Error(`CORS: origin ${origin} not allowed`));
+      // FIXED — this called back with an Error, which Express routes to the
+      // global error handler: a browser from a non-allowed origin got a 500
+      // "Something went wrong" (logged as an unhandled server error) instead
+      // of a CORS rejection. Returning `false` denies the origin without
+      // manufacturing a server fault. `middleware/error.js` also maps any
+      // remaining CORS error to a 403 rather than a 500.
+      logger.warn({ origin }, 'CORS origin rejected');
+      return cb(null, false);
     },
     credentials: true,
   })
@@ -86,6 +108,23 @@ try {
 // 404 + error handlers
 app.use(notFoundHandler);
 app.use(errorHandler);
+
+// FIXED — there was no process-level safety net. An unhandled rejection
+// anywhere outside a request (a background promise, a bad `await` in module
+// init) was swallowed by Node's default warning, and on recent Node versions
+// `unhandledRejection` TERMINATES the process by default — so a stray promise
+// could take the whole API down with nothing in the logs explaining why.
+// These handlers make such a failure visible, and deliberately do not exit:
+// on a serverless host the platform owns the process lifecycle.
+process.on('unhandledRejection', (reason) => {
+  logger.error(
+    { err: reason instanceof Error ? reason.message : String(reason), stack: reason?.stack },
+    'unhandled promise rejection'
+  );
+});
+process.on('uncaughtException', (err) => {
+  logger.error({ err: err.message, stack: err.stack }, 'uncaught exception');
+});
 
 // On Vercel, the file is required and Express handles the request. Locally
 // we start a listening server.

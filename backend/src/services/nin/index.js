@@ -40,6 +40,11 @@ const logger = require('../../utils/logger');
 
 let cachedToken = null;
 let cachedTokenExpiresAt = 0;
+// Holds the request that is currently fetching a token, so that concurrent
+// callers share one round-trip instead of each starting their own (single
+// flight). Note this cache is per-process, so on a serverless host each warm
+// instance keeps its own.
+let inFlightTokenRequest = null;
 
 async function getNinAuthToken() {
   const { ninauth } = config.nin;
@@ -47,25 +52,46 @@ async function getNinAuthToken() {
     throw new Error('NINAuth client credentials not configured');
   }
 
-  const now = Date.now();
-  if (cachedToken && cachedTokenExpiresAt > now + 30_000) {
+  // Re-use a live token, keeping 30s of headroom.
+  if (cachedToken && cachedTokenExpiresAt > Date.now() + 30_000) {
     return cachedToken;
   }
+  if (inFlightTokenRequest) return inFlightTokenRequest;
 
   const url = `${ninauth.baseUrl}/oauth/token`;
-  const res = await axios.post(
-    url,
-    {
-      grant_type: 'client_credentials',
-      client_id: ninauth.clientId,
-      client_secret: ninauth.clientSecret,
-    },
-    { timeout: 15_000 }
-  );
 
-  cachedToken = res.data.access_token;
-  cachedTokenExpiresAt = now + (res.data.expires_in || 3600) * 1000;
-  return cachedToken;
+  inFlightTokenRequest = (async () => {
+    const res = await axios.post(
+      url,
+      {
+        grant_type: 'client_credentials',
+        client_id: ninauth.clientId,
+        client_secret: ninauth.clientSecret,
+      },
+      { timeout: 15_000 }
+    );
+
+    const token = res.data?.access_token;
+    if (!token) throw new Error('NINAuth token response contained no access_token');
+
+    // Measured from when the response arrived, not from before the request was
+    // sent — the previous version added expires_in to a pre-request timestamp,
+    // so a slow handshake shortened the cached lifetime by its own duration.
+    cachedToken = token;
+    cachedTokenExpiresAt = Date.now() + (res.data.expires_in || 3600) * 1000;
+    return token;
+  })();
+
+  try {
+    return await inFlightTokenRequest;
+  } finally {
+    // Cleared on success and on failure, so a failed fetch does not pin every
+    // later caller to the same rejected promise. Resetting the same variable
+    // the await was taken from is the point of the single-flight latch, not a
+    // lost update.
+    // eslint-disable-next-line require-atomic-updates
+    inFlightTokenRequest = null;
+  }
 }
 
 async function verifyWithNinAuth({ nin, firstName, lastName, dateOfBirth }) {
@@ -126,12 +152,36 @@ async function verifyWithNinAuth({ nin, firstName, lastName, dateOfBirth }) {
 
 function decideNameMatch({ providedFirst, providedLast, returnedFirst, returnedLast }) {
   if (!providedFirst || !providedLast) return 'verified';
+
   const norm = (s) => (s || '').trim().toLowerCase();
   const a = norm(providedFirst), b = norm(returnedFirst);
   const c = norm(providedLast), d = norm(returnedLast);
+
+  // FIXED — callers derive the name parts with
+  // `parts[0]` / `parts.slice(-1)[0]`, so a farmer recorded with a single
+  // name ("Adaeze") yields firstName === lastName === "Adaeze". That was then
+  // compared against the provider's distinct first and last names, which
+  // always produced a 'mismatch' and left a legitimately-registered farmer
+  // flagged. For a single-name record, match it against either part.
+  if (a === c) {
+    const single = a;
+    const matchesEither =
+      (b && (single.includes(b) || b.includes(single))) ||
+      (d && (single.includes(d) || d.includes(single)));
+    return matchesEither ? 'verified' : 'mismatch';
+  }
+
   const fnMatch = a && b && (a.includes(b) || b.includes(a));
   const lnMatch = c && d && (c.includes(d) || d.includes(c));
-  return (fnMatch && lnMatch) ? 'verified' : 'mismatch';
+
+  // Nigerian records frequently have first and last names transposed between
+  // the NIMC record and what an agent types, so accept the swap too.
+  const swappedFirst = a && d && (a.includes(d) || d.includes(a));
+  const swappedLast = c && b && (c.includes(b) || b.includes(c));
+
+  if (fnMatch && lnMatch) return 'verified';
+  if (swappedFirst && swappedLast) return 'verified';
+  return 'mismatch';
 }
 
 /**
@@ -247,12 +297,49 @@ async function verifyNin({ nin, firstName, lastName, dateOfBirth }) {
     (provider === 'dojah' && dojah?.appId && dojah?.secretKey) ||
     (provider === 'ninauth' && ninauth?.clientId && ninauth?.clientSecret);
 
-  if (config.nin.devMode || !providerHasCreds) {
-    logger.warn(
-      { devMode: config.nin.devMode, provider, providerHasCreds },
-      'verifyNin running in DEV mode — stub response'
-    );
+  // Explicit dev mode — a deliberate opt-in, fine anywhere.
+  if (config.nin.devMode) {
+    logger.warn({ provider }, 'verifyNin running in DEV mode (NIN_DEV_MODE=true) — stub response');
     return devModeVerify({ nin, firstName, lastName });
+  }
+
+  // FIXED — the old condition was `if (config.nin.devMode || !providerHasCreds)`,
+  // so a production deployment with DOJAH_APP_ID or DOJAH_SECRET_KEY missing
+  // fell through to `devModeVerify()` and returned `status: 'verified'` with
+  // fabricated details ("Test User", 1990-01-01, Lagos) for EVERY NIN. The
+  // only trace was a log warning. Nothing failed, nothing was flagged, and the
+  // admin dashboard showed every farmer as verified — so a missing env var
+  // silently turned identity verification into a no-op.
+  //
+  // Missing credentials outside explicit dev mode is now a hard failure:
+  // `status: 'failed'` is recorded, the farmer is left unverified, and an
+  // admin can see there is a configuration problem.
+  if (!providerHasCreds) {
+    const missing =
+      provider === 'dojah'
+        ? ['DOJAH_APP_ID', 'DOJAH_SECRET_KEY'].filter(
+            (k) => !process.env[k]
+          )
+        : ['NINAUTH_CLIENT_ID', 'NINAUTH_CLIENT_SECRET'].filter(
+            (k) => !process.env[k]
+          );
+
+    logger.error(
+      { provider, missing },
+      'NIN provider credentials missing — verification cannot run. ' +
+        'Set the missing env vars, or set NIN_DEV_MODE=true to use the stub deliberately.'
+    );
+
+    return {
+      status: 'failed',
+      reference: null,
+      details: null,
+      raw: {
+        error: `NIN provider "${provider}" is not configured`,
+        missingEnv: missing,
+        hint: 'Set NIN_DEV_MODE=true to use the development stub intentionally.',
+      },
+    };
   }
 
   try {

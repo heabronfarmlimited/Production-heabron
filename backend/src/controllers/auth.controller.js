@@ -6,8 +6,8 @@ const { generateOtp } = require('../utils/crypto');
 const { ok, created, badRequest, unauthorized, notFound, conflict, serverError } = require('../utils/response');
 const email = require('../services/email');
 const { logActivity } = require('../utils/activity');
-const config = require('../config');
 const logger = require('../utils/logger');
+const { ADMIN_ROLES } = require('../middleware/auth');
 
 const OTP_TTL_MIN = 10;
 
@@ -126,31 +126,53 @@ function buildAuthPayload(profile, role, partnerId) {
 // Creates the auth.users row and triggers a verification OTP. The agent's
 // profile/KYC is added in step 3.
 // ============================================================================
+/** Supabase's duplicate-email error text varies by version; match broadly. */
+function isDuplicateUserError(message) {
+  return /already been registered|already registered|already exists|duplicate key/i.test(
+    message || ''
+  );
+}
+
 async function signupStep1(req, res) {
   const sb = supabaseAdmin();
   const { email: emailAddr, password } = req.body;
   const normalized = normalizeEmail(emailAddr);
 
-  // Check if email already exists
-  const { data: existing } = await sb.auth.admin.listUsers();
-  const taken = existing?.users?.some((u) => u.email?.toLowerCase() === normalized);
-  if (taken) return conflict(res, 'Email already registered');
-
+  // FIXED — this used to call `sb.auth.admin.listUsers()` and scan the result
+  // for a matching address. Two bugs:
+  //   1. `listUsers()` paginates at 50 by default, so past 50 agents the
+  //      duplicate check silently stopped working.
+  //   2. It fetched the whole user table on every signup, which is the main
+  //      reason signup felt slow ("takes forever before they get the OTP").
+  // `createUser` already rejects a duplicate, so we let it tell us.
   const { data, error } = await sb.auth.admin.createUser({
     email: normalized,
     password,
-    email_confirm: false,
+    // FIXED — was `false`. Heabron runs its own OTP verification and its own
+    // admin approval, so Supabase's email-confirmation flag is not the gate.
+    //
+    // Leaving it false was breaking logins outright: `login()` uses
+    // `signInWithPassword`, which Supabase rejects with "Email not confirmed"
+    // while this flag is false. The flag was only flipped in
+    // `verifySignupOtp` via the same broken `listUsers()` lookup, so any agent
+    // who wasn't in the first 50 users verified their OTP successfully and
+    // then could never log in — surfacing as "Invalid email or password".
+    email_confirm: true,
     user_metadata: { role: 'field_agent' },
   });
+
   if (error) {
+    if (isDuplicateUserError(error.message)) {
+      return conflict(res, 'Email already registered');
+    }
     logger.warn({ err: error.message }, 'signup create user failed');
     return badRequest(res, error.message);
   }
 
-  // Send OTP — if creating the OTP row fails we MUST surface that. Previously
-  // the insert was awaited without checking the result, so a silent RLS / key
-  // failure produced a 201 with no row in otp_codes and a confusing
-  // "OTP not_found" on verify.
+  // If creating the OTP row fails we MUST surface that. Previously the insert
+  // was awaited without checking the result, so a silent RLS / key failure
+  // produced a 201 with no row in otp_codes and a confusing "OTP not_found"
+  // on verify.
   let code;
   try {
     code = await createOtp(normalized, 'signup');
@@ -158,13 +180,41 @@ async function signupStep1(req, res) {
     logger.error({ err: e.message }, 'createOtp threw inside signupStep1');
     return serverError(res, 'Could not create verification code, please try again');
   }
-  email.safe(email.sendOtp)(normalized, { fullName: '', otpCode: code, purpose: 'signup' });
+
+  // FIXED — this was `email.safe(email.sendOtp)(...)`, which is deliberately
+  // fire-and-forget. That is fatal on a serverless host: Vercel freezes the
+  // function as soon as the response is returned, killing the in-flight HTTPS
+  // request to Resend. Whether the mail escaped depended on whether the
+  // instance happened to stay warm — which is exactly why agents sometimes
+  // got the code and sometimes never did.
+  //
+  // The send is now awaited, and a delivery failure is reported rather than
+  // swallowed, so the app can tell the agent to retry instead of parking them
+  // on an OTP screen for a code that will never arrive.
+  const delivery = await email.sendOtp(normalized, {
+    fullName: '',
+    otpCode: code,
+    purpose: 'signup',
+  });
+
+  if (delivery?.error) {
+    logger.error(
+      { err: delivery.error, email: normalized },
+      'OTP email delivery failed during signup'
+    );
+    return serverError(
+      res,
+      'We could not send your verification code. Please check the address and try again.'
+    );
+  }
 
   return created(res, {
     userId: data.user.id,
     email: normalized,
     nextStep: 'verify_otp',
     otpSentTo: normalized,
+    // `true` when RESEND_API_KEY is unset (dry run) so staging is obvious.
+    emailSkipped: Boolean(delivery?.skipped),
   });
 }
 
@@ -176,15 +226,12 @@ async function verifySignupOtp(req, res) {
   const result = await consumeOtp(emailAddr, code, purpose);
   if (!result.ok) return badRequest(res, `OTP ${result.reason}`);
 
-  if (purpose === 'signup') {
-    const sb = supabaseAdmin();
-    const normalized = normalizeEmail(emailAddr);
-    const { data: list } = await sb.auth.admin.listUsers();
-    const user = list?.users?.find((u) => u.email?.toLowerCase() === normalized);
-    if (user) {
-      await sb.auth.admin.updateUserById(user.id, { email_confirm: true });
-    }
-  }
+  // FIXED — this used to run a second full `listUsers()` scan to find the user
+  // and set `email_confirm: true`. Past 50 users the lookup returned nothing,
+  // the flag was never set, and the agent could never log in afterwards.
+  //
+  // `signupStep1` now creates the user already confirmed, so there is nothing
+  // to patch up here. Consuming the OTP is the verification.
   return ok(res, { verified: true });
 }
 
@@ -201,8 +248,21 @@ async function resendOtp(req, res) {
     logger.error({ err: e.message }, 'createOtp threw inside resendOtp');
     return serverError(res, 'Could not create verification code, please try again');
   }
-  email.safe(email.sendOtp)(normalized, { fullName: '', otpCode: code, purpose });
-  return ok(res, { resent: true });
+  // FIXED — was fire-and-forget, which is killed when a serverless instance
+  // freezes on response. Awaited so a resend that fails says so instead of
+  // leaving the agent tapping "Resend" against a code that never ships.
+  const delivery = await email.sendOtp(normalized, {
+    fullName: '',
+    otpCode: code,
+    purpose,
+  });
+
+  if (delivery?.error) {
+    logger.error({ err: delivery.error, email: normalized, purpose }, 'OTP resend failed');
+    return serverError(res, 'We could not resend your code. Please try again shortly.');
+  }
+
+  return ok(res, { resent: true, emailSkipped: Boolean(delivery?.skipped) });
 }
 
 // ============================================================================
@@ -263,10 +323,26 @@ async function completeSignup(req, res) {
     nin_verification_payload: ninResult.raw,
   }).eq('user_id', userId);
 
-  email.safe(email.sendAgentApplicationSubmitted)(req.user.email, { fullName });
+  // FIXED (audit) — the last remaining fire-and-forget email in the codebase.
+  // `email.safe()` used to return undefined; it now returns the promise, so
+  // this is awaited like the other 15 call sites. On Vercel the lambda is
+  // frozen when the response is written, so the agent's "we received your
+  // application" confirmation was being killed in flight — the same defect
+  // the OTP send above was already fixed for.
+  const appEmail = await email.safe(email.sendAgentApplicationSubmitted)(req.user.email, { fullName });
+  if (appEmail?.error) {
+    logger.warn({ err: appEmail.error, to: req.user.email }, 'application received email rejected');
+  }
 
-  // Notify all super_admins
-  const { data: admins } = await sb.from('user_roles').select('user_id').eq('role', 'super_admin');
+  // Notify all admins.
+  // FIXED (audit) — this filtered `.eq('role', 'super_admin')`, so ops_admin
+  // and finance_admin were never told a new application had arrived, unlike
+  // every other admin broadcast in the codebase (which use ADMIN_ROLES).
+  const { data: admins, error: adminErr } = await sb
+    .from('user_roles')
+    .select('user_id')
+    .in('role', ADMIN_ROLES);
+  if (adminErr) logger.warn({ err: adminErr.message, code: adminErr.code }, 'admin lookup for application notification failed');
   if (admins?.length) {
     const userIds = admins.map((a) => a.user_id);
     await sb.from('notifications').insert(userIds.map((uid) => ({
@@ -378,13 +454,53 @@ async function login(req, res) {
   const { email: emailAddr, password } = req.body;
 
   // Use Supabase Auth to verify credentials
-  const { data, error } = await sb.auth.signInWithPassword({ email: emailAddr, password });
+  const { data, error } = await sb.auth.signInWithPassword({
+    email: normalizeEmail(emailAddr),
+    password,
+  });
+
   if (error) {
-    logger.debug({ err: error.message }, 'login failed');
+    // FIXED — this logged at `debug`, which is below the production log level,
+    // so the real Supabase reason was invisible. "Email not confirmed" in
+    // particular was being reported to agents as "Invalid email or password",
+    // which made a configuration bug look like a forgotten password.
+    logger.warn(
+      { err: error.message, status: error.status, email: normalizeEmail(emailAddr) },
+      'login failed'
+    );
+
+    // Self-heal accounts left unconfirmed by the old signup path: Heabron
+    // gates on its own OTP plus admin approval, so an unconfirmed Supabase
+    // flag is a leftover of the previous bug, never a security boundary.
+    if (/email not confirmed/i.test(error.message || '')) {
+      const healed = await confirmEmailByAddress(normalizeEmail(emailAddr));
+      if (healed) {
+        const retry = await sb.auth.signInWithPassword({
+          email: normalizeEmail(emailAddr),
+          password,
+        });
+        if (!retry.error && retry.data?.user) {
+          logger.info(
+            { email: normalizeEmail(emailAddr) },
+            'login recovered after confirming a legacy unconfirmed account'
+          );
+          return finishLogin(req, res, sb, retry.data.user.id);
+        }
+      }
+    }
+
     return unauthorized(res, 'Invalid email or password');
   }
 
-  const userId = data.user.id;
+  return finishLogin(req, res, sb, data.user.id);
+}
+
+/**
+ * Loads the profile and role for an authenticated user and returns the token
+ * payload. Extracted so the legacy-account recovery path above can reuse it
+ * rather than duplicating the response shape.
+ */
+async function finishLogin(req, res, sb, userId) {
   const { data: profile } = await sb.from('profiles').select('*').eq('user_id', userId).maybeSingle();
   if (!profile) return unauthorized(res, 'Profile missing — contact support');
 
@@ -404,6 +520,82 @@ async function login(req, res) {
   await logActivity({ actor: { userId, role: roleRow?.role }, action: 'login', entityType: 'user', entityId: userId, req });
 
   return ok(res, { ...tokens, partner });
+}
+
+/**
+ * Finds one auth user by email address, paging through `listUsers()`.
+ *
+ * FIXED — three separate call sites each did:
+ *
+ *     const { data: list } = await sb.auth.admin.listUsers();
+ *     const user = list?.users?.find((u) => u.email?.toLowerCase() === normalized);
+ *
+ * `listUsers()` returns **page 1 at 50 per page** by default. Past 50 users
+ * every one of those lookups silently returned `undefined`, producing three
+ * failures with no error logged anywhere:
+ *
+ *   - `verifySignupOtp` never set `email_confirm`, so the agent could never
+ *     log in (surfaced to them as "Invalid email or password")
+ *   - `forgotPassword` returned `{ sent: true }` and sent nothing — the
+ *     deliberate non-enumeration response made the miss invisible
+ *   - `resetPassword` returned "Account not found"
+ *
+ * Net effect for any agent beyond the 50th: locked out, with every recovery
+ * path also broken. This helper pages properly and is bounded.
+ *
+ * Note it is still O(users / 200) requests. Once the user table passes a few
+ * thousand, replace it with a direct lookup — a `profiles.email` index
+ * populated at signup is the obvious one.
+ */
+const LIST_USERS_PER_PAGE = 200;
+const LIST_USERS_MAX_PAGES = 25; // 5,000 users
+
+async function findAuthUserByEmail(normalized) {
+  if (!normalized) return null;
+  const sb = supabaseAdmin();
+
+  for (let page = 1; page <= LIST_USERS_MAX_PAGES; page += 1) {
+    const { data, error } = await sb.auth.admin.listUsers({
+      page,
+      perPage: LIST_USERS_PER_PAGE,
+    });
+
+    if (error) {
+      logger.error({ err: error.message, page }, 'listUsers failed');
+      return null;
+    }
+
+    const users = data?.users ?? [];
+    const match = users.find((u) => u.email?.toLowerCase() === normalized);
+    if (match) return match;
+
+    if (users.length < LIST_USERS_PER_PAGE) return null; // last page
+  }
+
+  logger.warn(
+    { email: normalized, maxPages: LIST_USERS_MAX_PAGES },
+    'findAuthUserByEmail exhausted its page budget — the user table has ' +
+      'outgrown this lookup; add a profiles.email index and query that instead'
+  );
+  return null;
+}
+
+/**
+ * Sets `email_confirm: true` for one address. Used only to recover accounts
+ * stranded by the previous signup path; new signups are created confirmed.
+ */
+async function confirmEmailByAddress(normalized) {
+  const match = await findAuthUserByEmail(normalized);
+  if (!match) return false;
+
+  const { error } = await supabaseAdmin().auth.admin.updateUserById(match.id, {
+    email_confirm: true,
+  });
+  if (error) {
+    logger.error({ err: error.message, userId: match.id }, 'email_confirm update failed');
+    return false;
+  }
+  return true;
 }
 
 // ============================================================================
@@ -441,11 +633,16 @@ async function forgotPassword(req, res) {
   const { email: emailAddr } = req.body;
   const normalized = normalizeEmail(emailAddr);
   const sb = supabaseAdmin();
-  const { data: list } = await sb.auth.admin.listUsers();
-  const user = list?.users?.find((u) => u.email?.toLowerCase() === normalized);
+
+  // FIXED — was an unpaginated `listUsers()`, so for any agent past the 50th
+  // this returned undefined and the function returned `{ sent: true }` having
+  // sent nothing. The non-enumeration response made that completely silent:
+  // password reset simply did not work and nobody could tell.
+  const user = await findAuthUserByEmail(normalized);
 
   // Always reply OK to avoid leaking which emails exist
   if (!user) {
+    logger.info({ email: normalized }, 'forgot-password requested for unknown address');
     return ok(res, { sent: true });
   }
   let code;
@@ -458,7 +655,22 @@ async function forgotPassword(req, res) {
     return ok(res, { sent: true });
   }
   const { data: profile } = await sb.from('profiles').select('full_name').eq('user_id', user.id).maybeSingle();
-  email.safe(email.sendOtp)(normalized, { fullName: profile?.full_name || '', otpCode: code, purpose: 'password_reset' });
+  // Awaited for the same serverless reason as signup. The response stays a
+  // flat `{ sent: true }` either way so the endpoint cannot be used to probe
+  // which addresses exist; a delivery failure is recorded in the log.
+  const delivery = await email.sendOtp(normalized, {
+    fullName: profile?.full_name || '',
+    otpCode: code,
+    purpose: 'password_reset',
+  });
+
+  if (delivery?.error) {
+    logger.error(
+      { err: delivery.error, email: normalized },
+      'password-reset OTP delivery failed'
+    );
+  }
+
   return ok(res, { sent: true });
 }
 
@@ -469,8 +681,10 @@ async function resetPassword(req, res) {
 
   const sb = supabaseAdmin();
   const normalized = normalizeEmail(emailAddr);
-  const { data: list } = await sb.auth.admin.listUsers();
-  const user = list?.users?.find((u) => u.email?.toLowerCase() === normalized);
+
+  // FIXED — same unpaginated `listUsers()` bug: an agent past the 50th who
+  // somehow obtained a valid code was told "Account not found".
+  const user = await findAuthUserByEmail(normalized);
   if (!user) return notFound(res, 'Account not found');
 
   await sb.auth.admin.updateUserById(user.id, { password: newPassword });

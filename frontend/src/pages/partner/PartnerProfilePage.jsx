@@ -9,14 +9,14 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
-import { BRAND } from '@/lib/brand';
+// FIXED — BRAND was imported but never used.
 import { initials } from '@/lib/utils';
 
 export default function PartnerProfilePage() {
-  const { user, refreshMe, logout } = useAuth();
+  const { refreshMe, logout } = useAuth();
   const navigate = useNavigate();
 
-  const { data: org, refetch } = useQuery({
+  const { data: org, refetch, isLoading: orgLoading, isError: orgError, error: orgErr } = useQuery({
     queryKey: ['partner-organization'],
     queryFn: () => api.get('/partner/organization'),
   });
@@ -40,7 +40,20 @@ export default function PartnerProfilePage() {
   function set(k, v) { setForm((f) => ({ ...f, [k]: v })); }
 
   const save = useMutation({
-    mutationFn: (body) => api.patch('/partner/organization', body),
+    // updatePartnerSelf accepts organizationName, contactName, contactPhone,
+    // address, state, website, taxId and logoUrl — email is NOT editable here.
+    // Blank optional fields must be omitted: `website` and `logoUrl` are
+    // validated as URIs and '' would 422 without the server-side empty-string
+    // strip, and sending '' for everything would wipe the record.
+    mutationFn: (body) =>
+      api.patch(
+        '/partner/organization',
+        Object.fromEntries(
+          Object.entries(body)
+            .map(([k, v]) => [k, typeof v === 'string' ? v.trim() : v])
+            .filter(([, v]) => v !== '' && v != null)
+        )
+      ),
     onSuccess: () => { toast.success('Profile updated'); refetch(); refreshMe(); },
   });
 
@@ -50,12 +63,18 @@ export default function PartnerProfilePage() {
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const { data } = await api.raw.post('/partner/uploads/partner_logo', fd);
-      const url = data.data?.url;
+      // FIXED — went through api.raw and hand-unwrapped two levels, so a
+      // `success:false` body produced `url === undefined`, which was then
+      // PATCHed onto the organization and still toasted "Logo updated".
+      const result = await api.post('/partner/uploads/partner_logo', fd, { silentError: true });
+      const url = result?.url;
+      if (!url) throw new Error('Upload returned no file URL');
       set('logoUrl', url);
       await api.patch('/partner/organization', { logoUrl: url });
       toast.success('Logo updated');
       refetch(); refreshMe();
+    } catch (e) {
+      toast.error(e?.response?.data?.error?.message || e?.message || 'Logo upload failed');
     } finally {
       setUploading(false);
     }
@@ -69,7 +88,9 @@ export default function PartnerProfilePage() {
       return api.post('/auth/change-password', { currentPassword: pw.currentPassword, newPassword: pw.newPassword });
     },
     onSuccess: () => { toast.success('Password updated'); setPw({ currentPassword: '', newPassword: '', confirm: '' }); },
-    onError: (e) => toast.error(e.message),
+    // Prefer the backend message (e.g. "Current password is incorrect") over
+    // the generic axios one.
+    onError: (e) => toast.error(e?.response?.data?.error?.message || e?.message || 'Could not change password'),
   });
 
   const [logoutOpen, setLogoutOpen] = useState(false);
@@ -82,13 +103,16 @@ export default function PartnerProfilePage() {
 
   return (
     <div className="max-w-5xl mx-auto">
-      {/* Hero banner with avatar */}
+      {/* FIXED — the banner pulled a hot-linked Unsplash stock photo at render
+          time: a third-party request on every page load, no licence record, and
+          a blank band whenever the CDN is blocked or offline. Replaced with the
+          brand gradient. */}
       <div className="relative rounded-2xl overflow-hidden mb-16">
         <div
-          className="h-44 bg-cover bg-center"
+          className="h-44"
           style={{
             backgroundImage:
-              "linear-gradient(120deg, rgba(27,64,41,0.85), rgba(44,107,71,0.55)), url('https://images.unsplash.com/photo-1500382017468-9049fed747ef?q=80&w=1400&auto=format&fit=crop')",
+              'linear-gradient(120deg, #1B4029 0%, #2C6B47 55%, #E0A82E 140%)',
           }}
         />
         <div className="absolute -bottom-12 left-8">
@@ -102,12 +126,29 @@ export default function PartnerProfilePage() {
             )}
           </div>
           <label className="absolute -right-2 bottom-1 size-8 rounded-full bg-forest-500 text-white flex items-center justify-center cursor-pointer shadow-card hover:bg-forest-600 transition">
-            <Upload className="size-4" />
-            <input type="file" accept="image/*" className="hidden" disabled={uploading}
-              onChange={(e) => e.target.files?.[0] && uploadLogo(e.target.files[0])} />
+            <Upload className="size-4" aria-hidden="true" />
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              disabled={uploading}
+              aria-label="Upload organization logo"
+              onChange={(e) => e.target.files?.[0] && uploadLogo(e.target.files[0])}
+            />
           </label>
         </div>
       </div>
+
+      {/* FIXED — no loading or error state: the form rendered blank inputs
+          while the organization loaded and stayed blank if it failed, which
+          looked like an empty profile the partner might then save over. */}
+      {orgError && (
+        <Card padded className="mb-6 border-red-200 bg-red-50/60">
+          <p className="text-sm text-red-700">
+            Could not load your organization{orgErr?.message ? `: ${orgErr.message}` : ''}. Don&apos;t save until it loads, or you may overwrite your details.
+          </p>
+        </Card>
+      )}
 
       {/* Organization Information */}
       <Card padded className="mb-6">
@@ -140,7 +181,13 @@ export default function PartnerProfilePage() {
             </Field>
           </div>
           <div className="md:col-span-2 flex justify-end">
-            <Button type="submit" loading={save.isPending}><Save className="size-4" /> Save changes</Button>
+            <Button
+              type="submit"
+              loading={save.isPending}
+              disabled={orgLoading || orgError || form.organizationName.trim().length < 2}
+            >
+              <Save className="size-4" /> Save changes
+            </Button>
           </div>
         </form>
       </Card>
@@ -180,10 +227,10 @@ export default function PartnerProfilePage() {
         <h3 className="font-display text-xl font-semibold text-red-600 mb-1">Danger Zone</h3>
         <p className="text-sm text-smoke mb-4 max-w-2xl">
           Deleting your account will permanently remove your profile access, organization settings,
-          and associated partner data. This action is irreversible. To continue, you'll be redirected
+          and associated partner data. This action is irreversible. To continue, you&apos;ll be redirected
           to a secure confirmation process before any account deletion takes place.
         </p>
-        <button onClick={() => setDeleteOpen(true)} className="text-red-600 font-semibold text-sm underline underline-offset-2 hover:text-red-700">
+        <button type="button" onClick={() => setDeleteOpen(true)} className="text-red-600 font-semibold text-sm underline underline-offset-2 hover:text-red-700">
           Delete My Account
         </button>
       </Card>
@@ -213,20 +260,25 @@ export default function PartnerProfilePage() {
 function DeleteAccountModal({ partnerId, onClose, onDeleted }) {
   const [confirmId, setConfirmId] = useState('');
   const [busy, setBusy] = useState(false);
-  const matches = confirmId.trim() === (partnerId || '').trim();
+  // FIXED — with no partnerId loaded, `''.trim() === ''` matched an empty box,
+  // arming the delete button before the page had loaded.
+  const expected = (partnerId || '').trim();
+  const matches = expected.length > 0 && confirmId.trim() === expected;
 
   async function doDelete() {
     if (!matches) return toast.error('Partner ID does not match');
     setBusy(true);
     try {
-      // Partner self-deletion routes through the standard profile deletion
-      // endpoint; backend revokes access and detaches the seat.
-      await api.delete('/partner/profile');
+      // DELETE /partner/profile soft-suspends the profile and removes the auth
+      // user; the partner organization row itself is retained for audit.
+      await api.delete('/partner/profile', { silentError: true });
       toast.success('Account deleted');
       onDeleted?.();
-    } catch {
-      // If self-delete isn't enabled, guide them to support.
-      toast.error('Could not delete automatically — contact support to complete deletion.');
+    } catch (e) {
+      toast.error(
+        e?.response?.data?.error?.message ||
+        'Could not delete automatically — contact support to complete deletion.'
+      );
     } finally {
       setBusy(false);
     }
@@ -234,14 +286,15 @@ function DeleteAccountModal({ partnerId, onClose, onDeleted }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4 animate-fade-in">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-elev p-6 relative">
-        <button onClick={onClose} className="absolute right-4 top-4 text-smoke hover:text-ink"><X className="size-5" /></button>
+      <div role="dialog" aria-modal="true" aria-labelledby="delete-account-title" className="w-full max-w-md bg-white rounded-2xl shadow-elev p-6 relative">
+        <button type="button" onClick={onClose} aria-label="Close dialog" className="absolute right-4 top-4 text-smoke hover:text-ink"><X className="size-5" /></button>
         <div className="flex items-center gap-2 mb-1">
           <AlertTriangle className="size-5 text-red-600" />
-          <h3 className="font-display text-lg font-semibold text-ink">Delete your account</h3>
+          <h3 id="delete-account-title" className="font-display text-lg font-semibold text-ink">Delete your account</h3>
         </div>
         <p className="text-sm text-smoke mb-4">Enter your Partner ID to confirm.</p>
         <Input value={confirmId} onChange={(e) => setConfirmId(e.target.value)} placeholder="Partner ID"
+          aria-label="Confirm your Partner ID to delete the account"
           className="border-red-200 focus:border-red-400 focus:ring-red-400/20 font-mono text-xs" />
         <div className="flex justify-end gap-2 mt-5">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>

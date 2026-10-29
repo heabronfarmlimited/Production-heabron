@@ -6,8 +6,18 @@ import { MapPin, ExternalLink } from 'lucide-react';
  * to open the full map. In production this can be swapped for a Mapbox/Google
  * tile that also draws the plot boundary polygon.
  */
-export function FarmMap({ lat, lng, label, height = 150 }) {
-  if (lat == null || lng == null || Number.isNaN(lat) || Number.isNaN(lng)) return null;
+export function FarmMap({ lat: rawLat, lng: rawLng, label, height = 150 }) {
+  // FIXED — gps_lat/gps_lng come back from Postgres NUMERIC as strings. The old
+  // guard (`Number.isNaN(lat)`) is false for any string, so a bad value got
+  // through and `lat.toFixed(5)` below threw. Coerce once, validate the range.
+  const lat = Number(rawLat);
+  const lng = Number(rawLng);
+  const valid =
+    rawLat != null && rawLng != null && rawLat !== '' && rawLng !== '' &&
+    Number.isFinite(lat) && Number.isFinite(lng) &&
+    Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+  if (!valid) return null;
+
   const d = 0.01; // bounding box padding (~1km)
   const bbox = `${lng - d}%2C${lat - d}%2C${lng + d}%2C${lat + d}`;
   const src = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${lat}%2C${lng}`;

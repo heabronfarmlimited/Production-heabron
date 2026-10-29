@@ -50,18 +50,37 @@ const initial = {
   mustChangePassword: false,
 };
 
-export const useAuth = create((set, get) => ({
+/**
+ * FIXED — role flags were computed inline at three call sites with slightly
+ * different inputs, and `refreshMe` didn't recompute them at all: a role
+ * revoked server-side stayed effective in the UI until a full reload. One
+ * helper now derives them everywhere, from the role the server just returned.
+ */
+function roleFlags(user) {
+  const role = user?.role || null;
+  return {
+    isAdmin: ADMIN_ROLES.includes(role),
+    isPartner: PARTNER_ROLES.includes(role),
+  };
+}
+
+export const useAuth = create((set) => ({
   ...initial,
 
   /** Resolve the current user from /auth/me using the stored token */
   hydrate: async () => {
+    // Nothing stored means "signed out" — don't fire a request that can only 401.
+    if (!localStorage.getItem('coopscore.accessToken')) {
+      set({ ...initial, loading: false });
+      return;
+    }
     try {
       const data = await api.get('/auth/me', { silentError: true });
+      if (!data?.user) throw new Error('No user on /auth/me');
       set({
         user: data.user,
         partner: normalizePartner(data.partner),
-        isAdmin: ADMIN_ROLES.includes(data.user?.role),
-        isPartner: PARTNER_ROLES.includes(data.user?.role),
+        ...roleFlags(data.user),
         mustChangePassword: !!data.user?.mustChangePassword,
         loading: false,
       });
@@ -73,12 +92,18 @@ export const useAuth = create((set, get) => ({
 
   login: async (email, password) => {
     const data = await api.post('/auth/login', { email, password });
+    // FIXED — `setTokens(data)` was called without checking that the envelope
+    // actually carried tokens. With the old `call()` a `success:false` body
+    // resolved to `undefined` and this threw a bare TypeError on destructuring,
+    // which the login screen reported as "Sign in failed".
+    if (!data?.accessToken || !data?.refreshToken) {
+      throw new Error('Sign-in did not return a session. Please try again.');
+    }
     setTokens(data);
     set({
       user: data.user,
       partner: normalizePartner(data.partner),
-      isAdmin: ADMIN_ROLES.includes(data.user?.role),
-      isPartner: PARTNER_ROLES.includes(data.user?.role),
+      ...roleFlags(data.user),
       mustChangePassword: !!data.user?.mustChangePassword,
       loading: false,
     });
@@ -86,16 +111,26 @@ export const useAuth = create((set, get) => ({
   },
 
   logout: async () => {
-    try { await api.post('/auth/logout', {}, { silentError: true }); } catch {}
+    // A failed logout call must not keep the user signed in locally: the
+    // tokens are cleared regardless, so the error is deliberately ignored.
+    try {
+      await api.post('/auth/logout', {}, { silentError: true });
+    } catch {
+      // ignored on purpose — see above
+    }
     clearTokens();
     set({ ...initial, loading: false });
   },
 
   refreshMe: async () => {
     const data = await api.get('/auth/me');
+    if (!data?.user) return;
     set({
       user: data.user,
       partner: normalizePartner(data.partner),
+      // Re-derive the role flags: a suspended or re-roled account must lose
+      // access on the next refresh, not on the next full page load.
+      ...roleFlags(data.user),
       mustChangePassword: !!data.user?.mustChangePassword,
     });
   },

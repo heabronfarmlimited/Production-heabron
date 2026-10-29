@@ -11,6 +11,8 @@ import { Modal } from '@/components/ui/Modal';
 import { DataTable, Pagination } from '@/components/ui/DataTable';
 import { initials, formatDate } from '@/lib/utils';
 
+const PAGE_SIZE = 20;
+
 export default function AgentsPage() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
@@ -18,15 +20,22 @@ export default function AgentsPage() {
   const [suspendTarget, setSuspendTarget] = useState(null);
   const qc = useQueryClient();
 
-  const { data: list, isLoading } = useQuery({
+  // FIXED — api.raw bypass replaced with the list helper (keeps `meta`).
+  const { data: list, isLoading, isError, error } = useQuery({
     queryKey: ['agents', { search, status, page }],
-    queryFn: () => api.raw.get('/admin/agents', { params: { search, status, page, pageSize: 20 } }).then((r) => r.data),
+    queryFn: () => api.list('/admin/agents', { params: { search, status, page, pageSize: PAGE_SIZE } }),
   });
 
   const reactivate = useMutation({
     mutationFn: (id) => api.post(`/admin/agents/${id}/reactivate`),
     onSuccess: () => { toast.success('Reactivated'); qc.invalidateQueries({ queryKey: ['agents'] }); },
   });
+
+  // FIXED — the row action read `r.user_id`, which is correct for the profiles
+  // row the API returns, but nothing guarded against a row without one: the
+  // request then hit /admin/agents/undefined/suspend and 400'd with "Invalid
+  // agentId". Disable the control instead.
+  const agentIdOf = (r) => r.user_id || null;
 
   const columns = [
     {
@@ -54,11 +63,15 @@ export default function AgentsPage() {
       align: 'right',
       render: (r) => (
         r.status === 'active' ? (
-          <Button variant="ghost" onClick={() => setSuspendTarget(r)}>
+          <Button variant="ghost" disabled={!agentIdOf(r)} onClick={() => setSuspendTarget(r)}>
             <Pause className="size-4" /> Suspend
           </Button>
         ) : r.status === 'suspended' ? (
-          <Button variant="secondary" onClick={() => reactivate.mutate(r.user_id)}>
+          <Button
+            variant="secondary"
+            disabled={!agentIdOf(r) || reactivate.isPending}
+            onClick={() => reactivate.mutate(agentIdOf(r))}
+          >
             <Play className="size-4" /> Reactivate
           </Button>
         ) : null
@@ -80,12 +93,18 @@ export default function AgentsPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-smoke" />
             <Input
               placeholder="Search by name…"
+              aria-label="Search agents by name"
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               className="pl-10"
             />
           </div>
-          <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} className="input max-w-[200px]">
+          <select
+            value={status}
+            onChange={(e) => { setStatus(e.target.value); setPage(1); }}
+            className="input max-w-[200px]"
+            aria-label="Filter agents by status"
+          >
             <option value="">All statuses</option>
             <option value="active">Active</option>
             <option value="pending">Pending</option>
@@ -95,13 +114,25 @@ export default function AgentsPage() {
         </div>
       </Card>
 
+      {isError && (
+        <Card padded className="mb-4 border-red-200 bg-red-50/60">
+          <p className="text-sm text-red-700">Could not load agents{error?.message ? `: ${error.message}` : ''}.</p>
+        </Card>
+      )}
+
       <DataTable
         loading={isLoading}
         columns={columns}
-        rows={list?.data || []}
-        empty={<EmptyState icon={UserCheck} title="No agents found" />}
+        rows={list?.data}
+        empty={
+          <EmptyState
+            icon={UserCheck}
+            title={search || status ? 'No agents match these filters' : 'No agents yet'}
+            description={search || status ? 'Clear the search or status filter.' : 'Approved field-agent applications appear here.'}
+          />
+        }
       />
-      <Pagination page={page} pageSize={20} total={list?.meta?.total || 0} onPageChange={setPage} />
+      <Pagination page={page} pageSize={list?.meta?.pageSize || PAGE_SIZE} total={list?.meta?.total || 0} onPageChange={setPage} />
 
       {suspendTarget && (
         <SuspendModal
@@ -121,9 +152,11 @@ function SuspendModal({ agent, onClose, onDone }) {
   async function submit() {
     setBusy(true);
     try {
-      await api.post(`/admin/agents/${agent.user_id}/suspend`, { reason });
-      toast.success(`${agent.full_name} suspended`);
+      await api.post(`/admin/agents/${agent.user_id}/suspend`, { reason: reason.trim() });
+      toast.success(`${agent.full_name || 'Agent'} suspended`);
       onDone();
+    } catch {
+      /* toasted by the api interceptor */
     } finally {
       setBusy(false);
     }
@@ -133,7 +166,7 @@ function SuspendModal({ agent, onClose, onDone }) {
     <Modal
       open
       onClose={onClose}
-      title={`Suspend ${agent.full_name}?`}
+      title={`Suspend ${agent.full_name || 'this agent'}?`}
       description="The agent will be locked out and notified by email."
       footer={
         <>

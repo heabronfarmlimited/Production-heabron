@@ -6,7 +6,7 @@ import { useAuth } from '@/lib/auth';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { MetricCard, Card, TierPill, Skeleton } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { formatNaira, formatNumber } from '@/lib/utils';
+import { formatNaira, formatNumber, formatScore } from '@/lib/utils';
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 
 const TIER_COLORS = { A: '#2C6B47', B: '#4F8E6C', C: '#E0A82E', D: '#C84B4B' };
@@ -15,20 +15,22 @@ export default function PartnerDashboardPage() {
   const navigate = useNavigate();
   const { partner, user } = useAuth();
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['partner-dashboard'],
     queryFn: () => api.get('/partner/dashboard'),
   });
 
-  const tierData = data
-    ? Object.entries(data.riskDistribution || {}).map(([tier, value]) => ({ tier, value }))
-    : [];
+  const tierData = Object.entries(data?.riskDistribution || {})
+    .map(([tier, value]) => ({ tier, value: Number(value) || 0 }));
+  const totals = data?.totals || {};
 
   return (
     <>
       <PageHeader
-        eyebrow={partner?.organization_name || 'Partner portal'}
-        title={`Welcome${user?.fullName ? `, ${user.fullName.split(' ')[0]}` : ''}`}
+        eyebrow={partner?.organizationName || partner?.organization_name || 'Partner portal'}
+        // FIXED — `user.fullName.split(' ')[0]` on a blank name yielded '' and
+        // rendered a dangling "Welcome, ".
+        title={`Welcome${firstName(user?.fullName) ? `, ${firstName(user.fullName)}` : ''}`}
         description="Search borrowers, review forwarded financing requests, and monitor your portfolio risk."
         actions={
           <>
@@ -42,28 +44,43 @@ export default function PartnerDashboardPage() {
         }
       />
 
+      {/* FIXED — no error state: a failed request rendered zeroes, which a
+          lender would read as "this network has no borrowers". */}
+      {isError && (
+        <Card padded className="mb-6 border-red-200 bg-red-50/60">
+          <p className="text-sm text-red-700">
+            Could not load your dashboard{error?.message ? `: ${error.message}` : ''}. The figures below are unavailable, not zero.
+          </p>
+        </Card>
+      )}
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {isLoading ? (
           <>{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-32" />)}</>
         ) : (
           <>
+            {/* FIXED — these two read `cooperativesInSystem` /
+                `farmersInSystem`, which the dashboard controller computes as a
+                count of EVERY cooperative and farmer on the platform, but the
+                captions said "In your network" / implied they were the
+                partner's own. Relabelled to match what the number actually is. */}
             <MetricCard
               label="Cooperatives"
-              value={formatNumber(data?.totals?.cooperativesInSystem)}
-              sub="In your network"
+              value={formatNumber(totals.cooperativesInSystem)}
+              sub="On the CoopScore network"
               icon={Users}
               to="/partner/cooperatives"
             />
             <MetricCard
               label="Farmers"
-              value={formatNumber(data?.totals?.farmersInSystem)}
-              sub="Browse full directory"
+              value={formatNumber(totals.farmersInSystem)}
+              sub="On the CoopScore network"
               icon={Sprout}
               to="/partner/farmers"
             />
             <MetricCard
               label="Pending requests"
-              value={formatNumber(data?.totals?.requestsPending)}
+              value={formatNumber(totals.requestsPending)}
               sub="Awaiting your decision"
               tone="accent"
               icon={Banknote}
@@ -71,7 +88,7 @@ export default function PartnerDashboardPage() {
             />
             <MetricCard
               label="Approved"
-              value={formatNumber(data?.totals?.requestsApproved)}
+              value={formatNumber(totals.requestsApproved)}
               sub="Financed by you"
               tone="primary"
               icon={TrendingUp}
@@ -82,7 +99,16 @@ export default function PartnerDashboardPage() {
       </div>
 
       {!isLoading && data?.money && (
-        <Card className="mb-6 cursor-pointer hover:shadow-md transition-all group" onClick={() => navigate('/partner/portfolio')}>
+        <Card
+          className="mb-6 cursor-pointer hover:shadow-md transition-all group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-forest-500/40"
+          role="button"
+          tabIndex={0}
+          aria-label="Open portfolio"
+          onClick={() => navigate('/partner/portfolio')}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/partner/portfolio'); }
+          }}
+        >
           <div className="flex items-center justify-between mb-3">
             <p className="eyebrow">Lending summary</p>
             <ArrowUpRight className="size-4 text-smoke opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -91,7 +117,9 @@ export default function PartnerDashboardPage() {
             <MoneyStat label="Total loaned" value={formatNaira(data.money.totalLoaned)} />
             <MoneyStat label="Total repaid" value={formatNaira(data.money.totalRepaid)} />
             <MoneyStat label="Outstanding" value={formatNaira(data.money.totalOutstanding)} />
-            <MoneyStat label="Repayment rate" value={`${data.money.repaymentRate ?? 0}%`} accent />
+            {/* repaymentRate is a percentage with one decimal, already
+                computed server-side — don't recompute or round it here. */}
+            <MoneyStat label="Repayment rate" value={`${formatScore(data.money.repaymentRate ?? 0)}%`} accent />
           </div>
         </Card>
       )}
@@ -107,7 +135,7 @@ export default function PartnerDashboardPage() {
               Watchlist <ArrowUpRight className="size-4" />
             </Button>
           </div>
-          {tierData.every((d) => d.value === 0) ? (
+          {tierData.length === 0 || tierData.every((d) => d.value === 0) ? (
             <p className="text-sm text-smoke py-12 text-center">No financed cooperatives yet.</p>
           ) : (
             <div className="flex items-center gap-6">
@@ -153,7 +181,7 @@ export default function PartnerDashboardPage() {
 
 function QuickAction({ icon: Icon, title, desc, onClick }) {
   return (
-    <button onClick={onClick} className="w-full flex items-start gap-3 p-3 rounded-xl hover:bg-bone transition text-left">
+    <button type="button" onClick={onClick} className="w-full flex items-start gap-3 p-3 rounded-xl hover:bg-bone transition text-left">
       <div className="size-10 rounded-lg bg-forest-50 text-forest-500 flex items-center justify-center shrink-0">
         <Icon className="size-5" />
       </div>
@@ -173,4 +201,9 @@ function MoneyStat({ label, value, accent }) {
       <p className={`font-display text-lg font-bold mt-0.5 ${accent ? 'text-harvest-600' : 'text-ink'}`}>{value}</p>
     </div>
   );
+}
+
+function firstName(full) {
+  if (!full || typeof full !== 'string') return '';
+  return full.trim().split(/\s+/)[0] || '';
 }

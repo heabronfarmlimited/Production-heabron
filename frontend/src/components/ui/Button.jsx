@@ -9,9 +9,18 @@ const VARIANTS = {
   accent: 'btn-accent',
 };
 
-export function Button({ variant = 'primary', loading, children, className, disabled, ...rest }) {
+export function Button({ variant = 'primary', loading, children, className, disabled, type = 'button', ...rest }) {
+  // FIXED — the default HTML button type is "submit", so every Button placed
+  // inside a <form> (including modal footers) submitted that form on click.
+  // Default to "button"; callers pass type="submit" explicitly.
   return (
-    <button className={cn(VARIANTS[variant], className)} disabled={disabled || loading} {...rest}>
+    <button
+      type={type}
+      className={cn(VARIANTS[variant], className)}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
+      {...rest}
+    >
       {loading && <Loader2 className="size-4 animate-spin" />}
       {children}
     </button>

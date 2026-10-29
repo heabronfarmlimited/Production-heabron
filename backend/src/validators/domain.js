@@ -25,7 +25,28 @@ const createCooperative = Joi.object({
   gpsPolygon: Joi.array().items(Joi.object({ lat: gpsLat, lng: gpsLng })).optional(),
 });
 
-const updateCooperative = createCooperative.fork(Object.keys(createCooperative.describe().keys), (s) => s.optional());
+/**
+ * FIXED — two bugs in every `createX.fork(...)` update schema.
+ *
+ *  1. `fork()` makes keys optional but KEEPS their `.default()`. Joi therefore
+ *     injected the creation defaults into every PATCH body, and the controller
+ *     wrote them. `PATCH /cooperatives/:id {"name":"X"}` also wrote
+ *     `crops_supported: []` — wiping the crop list. `PATCH /farmers/:id`
+ *     reset `household_size` to 1 and `dependents` to 0; a nested farm patch
+ *     reset `plot_count`, `irrigation_access`, `water_source` and
+ *     `years_experience`. Silent, every time. `noDefaults: true` is the Joi
+ *     switch for "this is a patch, not a creation".
+ *
+ *  2. Because the defaults were injected, the body was never empty, so an
+ *     empty PATCH reached the database as a write of default values instead of
+ *     being rejected. With defaults off, `.min(1)` now catches it.
+ */
+const patchOptions = { noDefaults: true };
+
+const updateCooperative = createCooperative
+  .fork(Object.keys(createCooperative.describe().keys), (s) => s.optional())
+  .min(1)
+  .options(patchOptions);
 
 // =============================================================================
 // FARMERS
@@ -79,7 +100,21 @@ const mapFarm = Joi.object({
   overrideSizeAcres: Joi.number().min(0).optional(), // optional manual override
 });
 
-const updateFarmer = createFarmer.fork(Object.keys(createFarmer.describe().keys), (s) => s.optional());
+// FIXED — `fork()` only reaches TOP-LEVEL keys, so `farm.farmSizeAcres` and
+// `farm.cropType` stayed `.required()` on update. Any PATCH that touched the
+// farm at all ("change the soil type") was rejected with
+// "farm.farmSizeAcres is required" unless the client re-sent the whole farm
+// object. The nested schema is forked explicitly here.
+const farmUpdateSchema = createFarmer
+  .extract('farm')
+  .fork(Object.keys(createFarmer.extract('farm').describe().keys), (s) => s.optional())
+  .min(1);
+
+const updateFarmer = createFarmer
+  .fork(Object.keys(createFarmer.describe().keys), (s) => s.optional())
+  .keys({ farm: farmUpdateSchema.optional() })
+  .min(1)
+  .options(patchOptions);
 
 // =============================================================================
 // DELIVERIES
@@ -180,7 +215,9 @@ const createProduction = Joi.object({
 
 const updateProduction = createProduction
   .fork(['farmerId', 'season', 'crop'], (s) => s.optional())
-  .keys({ farmerId: uuid.optional() });
+  .keys({ farmerId: uuid.optional() })
+  .min(1)
+  .options(patchOptions);
 
 // Admin verifies or rejects a submitted actual-yield record.
 const verifyProduction = Joi.object({
@@ -201,7 +238,10 @@ const createMarketAccess = Joi.object({
   harvestWindow: Joi.string().max(120).optional(),
   notes: Joi.string().max(500).optional(),
 });
-const updateMarketAccess = createMarketAccess.fork(['farmerId', 'buyerName'], (s) => s.optional());
+const updateMarketAccess = createMarketAccess
+  .fork(['farmerId', 'buyerName'], (s) => s.optional())
+  .min(1)
+  .options(patchOptions);
 
 // =============================================================================
 // FIELD NOTES (timeline)
@@ -224,7 +264,7 @@ const updateFieldNote = Joi.object({
   tagLabel: Joi.string().max(60).allow(null, '').optional(),
   tagVariant: Joi.string().valid('green', 'amber', 'neutral').optional(),
   eventDate: Joi.date().iso().optional(),
-}).min(1);
+}).min(1).options(patchOptions);
 
 // =============================================================================
 // CHANGE REQUESTS (field-agent edits awaiting admin approval)
@@ -251,6 +291,17 @@ const voidRepayment = Joi.object({
 const decideSettlement = Joi.object({
   decision: Joi.string().valid('approve', 'reject').required(),
   adminNotes: Joi.string().max(500).when('decision', { is: 'reject', then: Joi.required() }),
+
+  // FIXED — these two were missing, and the validate middleware runs with
+  // `stripUnknown: true`, so they were silently deleted from every request.
+  // decideSettlement() writes them into the wallet_transactions row as
+  // `reference_number` and `receipt_image_url`, which meant the payout ledger
+  // recorded NULL proof every time: the admin uploaded a bank-transfer receipt
+  // and typed a reference, both were discarded without error, and neither the
+  // agent nor an audit could see what backed the payout.
+  // Only meaningful when approving — a rejection transfers no money.
+  referenceNumber: Joi.string().max(100).optional(),
+  receiptImageUrl: Joi.string().uri().optional(),
 });
 
 const recordAgentDisbursement = Joi.object({
@@ -269,6 +320,26 @@ const recordAgentDisbursement = Joi.object({
 const confirmCashPurchase = Joi.object({
   decision: Joi.string().valid('confirm', 'reject').required(),
   adminNotes: Joi.string().max(500).optional(),
+});
+
+// =============================================================================
+// MANUAL CASH PURCHASE (agent)
+// -----------------------------------------------------------------------------
+// The agent-side half of the manual money flow: the agent buys inputs for a
+// farmer out of funds the admin disbursed, and files the proof. The admin then
+// confirms it via confirmCashPurchase above.
+// Mirrors recordAgentDisbursement, minus agentId (taken from the token) and
+// recipientName (derived from the farmer record, so it cannot be spoofed).
+// =============================================================================
+const recordCashPurchase = Joi.object({
+  farmerId: uuid.required(),
+  financingRequestId: uuid.optional(),
+  amount: Joi.number().positive().required(),
+  description: Joi.string().max(500).optional(),
+  referenceNumber: Joi.string().max(100).optional(),
+  paymentMethod: Joi.string().valid('cash', 'bank_transfer', 'mobile_money', 'in_kind').default('cash'),
+  receiptImageUrl: Joi.string().uri().optional(),
+  proofImageUrls: Joi.array().items(Joi.string().uri()).max(10).optional(),
 });
 
 // =============================================================================
@@ -303,7 +374,10 @@ const createPartner = Joi.object({
   taxId: Joi.string().max(60).optional(),
 });
 
-const updatePartner = createPartner.fork(Object.keys(createPartner.describe().keys), (s) => s.optional());
+const updatePartner = createPartner
+  .fork(Object.keys(createPartner.describe().keys), (s) => s.optional())
+  .min(1)
+  .options(patchOptions);
 
 // Partner editing their OWN organization (email not editable — it is the login).
 const updatePartnerSelf = Joi.object({
@@ -315,7 +389,7 @@ const updatePartnerSelf = Joi.object({
   website: Joi.string().uri().empty('').optional(),
   taxId: Joi.string().max(60).empty('').optional(),
   logoUrl: Joi.string().uri().empty('').optional(),
-});
+}).min(1).options(patchOptions);
 
 // =============================================================================
 // AGENT MANAGEMENT (admin)
@@ -338,7 +412,7 @@ const updateProfile = Joi.object({
   state: Joi.string().optional(),
   lga: Joi.string().optional(),
   avatarUrl: Joi.string().uri().optional(),
-});
+}).min(1).options(patchOptions);
 
 // =============================================================================
 // LIST / PAGINATION
@@ -352,14 +426,24 @@ const updateProfile = Joi.object({
 // admin list page. `.empty('')` converts an empty string to "absent" BEFORE
 // the rule runs, so unset filters are simply ignored.
 // =============================================================================
+// FIXED — `stripUnknown: true` deletes any key not declared here BEFORE the
+// controller runs, and several controllers read filters that were never
+// declared. The filters simply did nothing, with no error anywhere:
+//   • activity.controller  — actorId / action / entityType  (admin audit log
+//     filters were inert)
+//   • admin.wallet.listAllTransactions — source / transactionType
+//   • notifications.list   — unread   (the agent app's "unread only" toggle)
+//   • partner.search       — q / type
+// They are declared now so the documented filters actually filter.
 const listQuery = Joi.object({
   page: Joi.number().integer().min(1).default(1),
   pageSize: Joi.number().integer().min(1).max(100).default(20),
   search: Joi.string().max(120).empty('').optional(),
-  status: Joi.string().empty('').optional(),
+  status: Joi.string().max(60).empty('').optional(),
   farmerId: uuid.empty('').optional(),
   cooperativeId: uuid.empty('').optional(),
   agentId: uuid.empty('').optional(),
+  actorId: uuid.empty('').optional(),
   state: Joi.string().empty('').optional(),
   lga: Joi.string().empty('').optional(),
   crop: Joi.string().empty('').optional(),
@@ -367,7 +451,41 @@ const listQuery = Joi.object({
   tier: Joi.string().valid('A', 'B', 'C', 'D').empty('').optional(),
   startDate: Joi.date().iso().empty('').optional(),
   endDate: Joi.date().iso().empty('').optional(),
+  // Activity log filters
+  action: Joi.string().max(80).empty('').optional(),
+  entityType: Joi.string().max(60).empty('').optional(),
+  // Wallet transaction filters
+  source: Joi.string().max(60).empty('').optional(),
+  transactionType: Joi.string().max(40).empty('').optional(),
+  // Notification filter
+  unread: Joi.string().valid('true', 'false').empty('').optional(),
+  // Partner search
+  q: Joi.string().max(120).empty('').optional(),
+  type: Joi.string().valid('all', 'farmer', 'cooperative').empty('').optional(),
 }).options({ stripUnknown: true });
+
+// =============================================================================
+// REGIONAL BENCHMARKS (admin)
+// -----------------------------------------------------------------------------
+// FIXED — POST /admin/benchmarks had NO validator at all. Every farmer's yield
+// score is divided by `benchmark_yield_tonnes_per_hectare`, so an admin typo
+// ("4,5", "", null) wrote a non-numeric or zero benchmark and silently zeroed
+// the production score of every farmer growing that crop in that state.
+// =============================================================================
+const upsertBenchmark = Joi.object({
+  crop: Joi.string().min(2).max(60).required(),
+  state: Joi.string().min(2).max(60).required(),
+  lga: Joi.string().max(60).allow(null, '').optional(),
+  season: Joi.string().max(60).allow(null, '').optional(),
+  benchmarkYieldTonnesPerHectare: Joi.number().greater(0).max(1000).required(),
+  source: Joi.string().max(120).optional(),
+});
+
+// Mint a signed URL for a stored object.
+const signUrl = Joi.object({
+  bucket: Joi.string().max(80).required(),
+  path: Joi.string().max(400).required(),
+});
 
 module.exports = {
   createCooperative,
@@ -394,6 +512,9 @@ module.exports = {
   decideSettlement,
   recordAgentDisbursement,
   confirmCashPurchase,
+  recordCashPurchase,
+  upsertBenchmark,
+  signUrl,
   saveBankAccount,
   createPartner,
   updatePartner,

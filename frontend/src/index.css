@@ -109,3 +109,47 @@
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* ---------------------------------------------------------------------------
+ * Print / "Export PDF"
+ * FIXED — the credit-report pages call window.print() for their "Export PDF"
+ * action, but there were no print rules: the printed sheet carried the
+ * sidebar, top bar and action buttons, and cards were split across pages.
+ * ------------------------------------------------------------------------- */
+@media print {
+  @page { margin: 14mm; }
+
+  html, body {
+    background: #fff !important;
+  }
+
+  /* Chrome drops background colours by default; keep tier/status pills legible. */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Chrome: app chrome and controls are not part of the report. */
+  aside,
+  header,
+  .no-print {
+    display: none !important;
+  }
+
+  main {
+    padding: 0 !important;
+    max-width: none !important;
+  }
+
+  .card {
+    box-shadow: none !important;
+    border-color: #D6D3C2 !important;
+    break-inside: avoid;
+  }
+
+  /* Keep tables and timelines whole where possible. */
+  table { break-inside: auto; }
+  tr, li { break-inside: avoid; }
+
+  .skeleton { animation: none !important; }
+}

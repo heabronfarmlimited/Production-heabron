@@ -43,11 +43,15 @@ info:
     email: info@heabron.com
     url: https://www.heabron.com
 
+# NOTE: src/config/swagger.js replaces this list at request time with the host
+# the docs were actually opened from (see deriveBaseUrl), so "Try it out"
+# always targets the same environment you are reading from. This list is the
+# fallback for anyone consuming the raw YAML.
 servers:
+  - url: https://api.heabroncoopscore.com/api
+    description: Production
   - url: http://localhost:4000/api
     description: Local development
-  - url: https://heabron-coopscore-api.vercel.app/api
-    description: Production (Vercel)
 
 tags:
   - name: Health
@@ -66,21 +70,38 @@ tags:
   - name: Agent — Notifications
   - name: Agent — Uploads
   - name: Agent — Imports
+  - name: Agent — Change Requests
+  - name: Agent — Field Notes
+  - name: Agent — Market Access
   - name: Admin — Dashboard
   - name: Admin — Agents
   - name: Admin — Partners
   - name: Admin — Cooperatives
   - name: Admin — Farmers
+  - name: Admin — Production
+  - name: Admin — Deliveries
   - name: Admin — Financing
+  - name: Admin — Repayments
   - name: Admin — Credit
   - name: Admin — Benchmarks
   - name: Admin — Wallets
   - name: Admin — Activity
+  - name: Admin — Change Requests
+  - name: Admin — Notifications
+  - name: Admin — Profile
+  - name: Admin — Uploads
+  - name: Admin — Exports
   - name: Partner — Dashboard
   - name: Partner — Search
   - name: Partner — Credit Reports
   - name: Partner — Portfolio
   - name: Partner — Financing
+  - name: Partner — Cooperatives
+  - name: Partner — Farmers
+  - name: Partner — Field Agents
+  - name: Partner — Notifications
+  - name: Partner — Profile
+  - name: Partner — Uploads
 
 security:
   - bearerAuth: []

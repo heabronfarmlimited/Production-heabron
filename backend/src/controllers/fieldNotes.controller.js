@@ -1,27 +1,29 @@
 'use strict';
 
 const { supabaseAdmin } = require('../config/supabase');
-const { ok, created, notFound, forbidden, noContent } = require('../utils/response');
+const { ok, created, notFound, forbidden, noContent, badRequest, serverError } = require('../utils/response');
 const { logActivity } = require('../utils/activity');
+// FIXED — third copy of the same ownership check; shared now.
+const { assertFarmerAccess } = require('../utils/ownership');
 
-async function assertFarmer(sb, farmerId, user) {
-  const { data: farmer } = await sb.from('farmers').select('id, created_by_agent_id, cooperative_id').eq('id', farmerId).maybeSingle();
-  if (!farmer) return { error: 'not_found' };
-  if (user.role === 'field_agent' && farmer.created_by_agent_id !== user.userId) return { error: 'forbidden' };
-  return { farmer };
+/** Map an ownership-check failure onto a response. */
+function denyFor(res, code) {
+  if (code === 'not_found') return notFound(res, 'Farmer not found');
+  if (code === 'forbidden') return forbidden(res);
+  return serverError(res, 'Could not verify access to that farmer');
 }
 
 // GET /farmers/:farmerId/field-notes  (timeline, newest first)
 async function listByFarmer(req, res) {
   const sb = supabaseAdmin();
-  const acc = await assertFarmer(sb, req.params.farmerId, req.user);
-  if (acc.error === 'not_found') return notFound(res, 'Farmer not found');
-  if (acc.error === 'forbidden') return forbidden(res);
+  const acc = await assertFarmerAccess(sb, req.params.farmerId, req.user);
+  if (acc.error) return denyFor(res, acc.error);
   const { data, error } = await sb
     .from('field_notes')
     .select('*')
     .eq('farmer_id', req.params.farmerId)
-    .order('event_date', { ascending: false });
+    .order('event_date', { ascending: false })
+    .limit(500);
   if (error) throw error;
   return ok(res, data || []);
 }
@@ -30,9 +32,8 @@ async function listByFarmer(req, res) {
 async function create(req, res) {
   const sb = supabaseAdmin();
   const b = req.body;
-  const acc = await assertFarmer(sb, b.farmerId, req.user);
-  if (acc.error === 'not_found') return notFound(res, 'Farmer not found');
-  if (acc.error === 'forbidden') return forbidden(res);
+  const acc = await assertFarmerAccess(sb, b.farmerId, req.user);
+  if (acc.error) return denyFor(res, acc.error);
   const { data, error } = await sb.from('field_notes').insert({
     farmer_id: b.farmerId,
     cooperative_id: b.cooperativeId || acc.farmer.cooperative_id || null,
@@ -49,11 +50,17 @@ async function create(req, res) {
   return created(res, data);
 }
 
-// DELETE /field-notes/:noteId
+// PATCH /field-notes/:noteId
+// (the comment here used to read "DELETE /field-notes/:noteId")
 async function update(req, res) {
   const sb = supabaseAdmin();
-  const { data: existing } = await sb.from('field_notes').select('id, created_by_agent_id').eq('id', req.params.noteId).maybeSingle();
-  if (!existing) return notFound(res);
+  const { data: existing, error: readErr } = await sb
+    .from('field_notes')
+    .select('id, created_by_agent_id')
+    .eq('id', req.params.noteId)
+    .maybeSingle();
+  if (readErr) throw readErr;
+  if (!existing) return notFound(res, 'Field note not found');
   if (req.user.role === 'field_agent' && existing.created_by_agent_id !== req.user.userId) return forbidden(res);
 
   const b = req.body;
@@ -64,6 +71,7 @@ async function update(req, res) {
   if (b.tagLabel !== undefined) patch.tag_label = b.tagLabel || null;
   if (b.tagVariant !== undefined) patch.tag_variant = b.tagVariant;
   if (b.eventDate !== undefined) patch.event_date = b.eventDate;
+  if (Object.keys(patch).length === 0) return badRequest(res, 'No fields to update');
 
   const { data, error } = await sb.from('field_notes').update(patch).eq('id', req.params.noteId).select().single();
   if (error) throw error;
@@ -73,10 +81,21 @@ async function update(req, res) {
 
 async function remove(req, res) {
   const sb = supabaseAdmin();
-  const { data: existing } = await sb.from('field_notes').select('id, created_by_agent_id').eq('id', req.params.noteId).maybeSingle();
-  if (!existing) return notFound(res);
+  const { data: existing, error: readErr } = await sb
+    .from('field_notes')
+    .select('id, created_by_agent_id')
+    .eq('id', req.params.noteId)
+    .maybeSingle();
+  if (readErr) throw readErr;
+  if (!existing) return notFound(res, 'Field note not found');
   if (req.user.role === 'field_agent' && existing.created_by_agent_id !== req.user.userId) return forbidden(res);
-  await sb.from('field_notes').delete().eq('id', req.params.noteId);
+  // FIXED — the delete's error was discarded and 204 returned regardless.
+  const { error: delErr } = await sb.from('field_notes').delete().eq('id', req.params.noteId);
+  if (delErr) throw delErr;
+  // FIXED — the delete was not recorded in the activity log, unlike every
+  // other destructive action in the codebase (market access, farmer,
+  // cooperative and production deletes all log).
+  await logActivity({ actor: req.user, action: 'field_note_deleted', entityType: 'field_note', entityId: req.params.noteId, req });
   return noContent(res);
 }
 

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Building2, KeyRound, Pause, Play, Mail, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -11,16 +12,20 @@ import { Modal } from '@/components/ui/Modal';
 import { DataTable, Pagination } from '@/components/ui/DataTable';
 import { initials, formatDate } from '@/lib/utils';
 
+const PAGE_SIZE = 20;
+
 export default function PartnersPage() {
+  const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
   const [resetTarget, setResetTarget] = useState(null);
   const qc = useQueryClient();
 
-  const { data, isLoading } = useQuery({
+  // FIXED — api.raw bypass replaced with the list helper (keeps `meta`).
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['admin-partners', { search, page }],
-    queryFn: () => api.raw.get('/admin/partners', { params: { search, page, pageSize: 20 } }).then((r) => r.data),
+    queryFn: () => api.list('/admin/partners', { params: { search, page, pageSize: PAGE_SIZE } }),
   });
 
   const suspend = useMutation({
@@ -64,17 +69,37 @@ export default function PartnersPage() {
       key: 'actions',
       label: '',
       align: 'right',
+      // FIXED — these were icon-only buttons with no accessible name at all
+      // (a screen reader announced three unlabelled buttons per row), and a
+      // row click now opens the detail page, so each stops propagation.
       render: (r) => (
         <div className="flex items-center justify-end gap-1.5">
-          <Button variant="ghost" onClick={() => setResetTarget(r)}>
+          <Button
+            variant="ghost"
+            aria-label={`Reset password for ${r.organization_name}`}
+            title="Reset password"
+            onClick={(e) => { e.stopPropagation(); setResetTarget(r); }}
+          >
             <KeyRound className="size-4" />
           </Button>
           {r.status === 'active' ? (
-            <Button variant="ghost" onClick={() => suspend.mutate(r.id)}>
+            <Button
+              variant="ghost"
+              aria-label={`Suspend ${r.organization_name}`}
+              title="Suspend"
+              disabled={suspend.isPending}
+              onClick={(e) => { e.stopPropagation(); suspend.mutate(r.id); }}
+            >
               <Pause className="size-4" />
             </Button>
           ) : (
-            <Button variant="ghost" onClick={() => reactivate.mutate(r.id)}>
+            <Button
+              variant="ghost"
+              aria-label={`Reactivate ${r.organization_name}`}
+              title="Reactivate"
+              disabled={reactivate.isPending}
+              onClick={(e) => { e.stopPropagation(); reactivate.mutate(r.id); }}
+            >
               <Play className="size-4" />
             </Button>
           )}
@@ -100,15 +125,30 @@ export default function PartnersPage() {
         <div className="flex items-center gap-3 p-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-smoke" />
-            <Input placeholder="Search partner name…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="pl-10" />
+            <Input
+              placeholder="Search partner name…"
+              aria-label="Search partners by organization name"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              className="pl-10"
+            />
           </div>
         </div>
       </Card>
 
+      {isError && (
+        <Card padded className="mb-4 border-red-200 bg-red-50/60">
+          <p className="text-sm text-red-700">Could not load partners{error?.message ? `: ${error.message}` : ''}.</p>
+        </Card>
+      )}
+
+      {/* FIXED — /admin/partners/:partnerId (PartnerDetailPage) was never
+          linked from anywhere, so the route and its stats were unreachable. */}
       <DataTable
         loading={isLoading}
         columns={columns}
-        rows={data?.data || []}
+        rows={data?.data}
+        onRowClick={(r) => navigate(`/admin/partners/${r.id}`)}
         empty={<EmptyState
           icon={Building2}
           title="No partners yet"
@@ -116,7 +156,7 @@ export default function PartnersPage() {
           action={<Button onClick={() => setCreateOpen(true)}><Plus className="size-4" /> Add your first partner</Button>}
         />}
       />
-      <Pagination page={page} pageSize={20} total={data?.meta?.total || 0} onPageChange={setPage} />
+      <Pagination page={page} pageSize={data?.meta?.pageSize || PAGE_SIZE} total={data?.meta?.total || 0} onPageChange={setPage} />
 
       {createOpen && (
         <CreatePartnerModal onClose={() => setCreateOpen(false)} onCreated={() => qc.invalidateQueries({ queryKey: ['admin-partners'] })} />
@@ -161,22 +201,47 @@ function CreatePartnerModal({ onClose, onCreated }) {
 
   function set(k, v) { setForm((f) => ({ ...f, [k]: v })); }
 
+  const [uploading, setUploading] = useState(false);
   async function uploadLogo(file) {
-    const fd = new FormData();
-    fd.append('file', file);
-    const { data } = await api.raw.post('/admin/uploads/partner_logo', fd);
-    set('logoUrl', data.data?.url);
-    toast.success('Logo uploaded');
+    // FIXED — went through api.raw with no error handling and no busy state:
+    // a failed upload silently set logoUrl to undefined and still toasted
+    // "Logo uploaded".
+    setUploading(true);
+    try {
+      const result = await api.post('/admin/uploads/partner_logo', fd_of(file), { silentError: true });
+      if (!result?.url) throw new Error('Upload returned no URL');
+      set('logoUrl', result.url);
+      toast.success('Logo uploaded');
+    } catch (e) {
+      toast.error(e?.response?.data?.error?.message || e?.message || 'Logo upload failed');
+    } finally {
+      setUploading(false);
+    }
   }
 
+  // Only organizationName + organizationEmail are required by the validator;
+  // the rest are optional and must be omitted rather than sent as ''.
+  const canSubmit = form.organizationName.trim().length >= 2 && /\S+@\S+\.\S+/.test(form.organizationEmail);
+
   async function submit(e) {
-    e.preventDefault();
+    e?.preventDefault?.();
+    if (!canSubmit) {
+      toast.error('An organization name and a valid email are required');
+      return;
+    }
     setBusy(true);
     try {
-      const data = await api.post('/admin/partners', form);
+      const payload = Object.fromEntries(
+        Object.entries(form)
+          .map(([k, v]) => [k, typeof v === 'string' ? v.trim() : v])
+          .filter(([, v]) => v !== '' && v != null)
+      );
+      const data = await api.post('/admin/partners', payload);
       setResult(data);
       onCreated?.();
       toast.success('Partner created — credentials emailed');
+    } catch {
+      /* toasted by the api interceptor / envelope handler */
     } finally {
       setBusy(false);
     }
@@ -195,7 +260,7 @@ function CreatePartnerModal({ onClose, onCreated }) {
           <p className="font-display text-base font-semibold text-forest-900">{result.partner?.organization_name}</p>
           <p className="text-sm text-forest-700">{result.partner?.organization_email}</p>
           <p className="text-xs text-smoke mt-3">
-            The partner has been emailed their temporary password. They'll be required to change it on first sign-in.
+            The partner has been emailed their temporary password. They&apos;ll be required to change it on first sign-in.
           </p>
         </Card>
       </Modal>
@@ -212,7 +277,7 @@ function CreatePartnerModal({ onClose, onCreated }) {
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={submit} loading={busy}>
+          <Button onClick={submit} loading={busy} disabled={!canSubmit}>
             <Plus className="size-4" /> Create partner
           </Button>
         </>
@@ -245,12 +310,25 @@ function CreatePartnerModal({ onClose, onCreated }) {
               <img src={form.logoUrl} alt="" className="size-14 rounded-lg object-contain bg-bone p-1 border border-whisper" />
             )}
             <label className="btn-secondary cursor-pointer">
-              {form.logoUrl ? 'Change logo' : 'Upload logo'}
-              <input type="file" accept="image/*" className="hidden" onChange={(e) => e.target.files?.[0] && uploadLogo(e.target.files[0])} />
+              {uploading ? 'Uploading…' : form.logoUrl ? 'Change logo' : 'Upload logo'}
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                disabled={uploading}
+                aria-label="Upload partner logo"
+                onChange={(e) => e.target.files?.[0] && uploadLogo(e.target.files[0])}
+              />
             </label>
           </div>
         </Field>
       </form>
     </Modal>
   );
+}
+
+function fd_of(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  return fd;
 }

@@ -97,11 +97,8 @@ function measureFarm(polygon) {
   };
 }
 
-module.exports = {
-  normalizePolygon,
-  polygonAreaSqMeters,
-  polygonCentroid,
-  measureFarm,
-  SQM_PER_ACRE,
-  SQM_PER_HECTARE,
-};
+// FIXED — `polygonAreaSqMeters`, `polygonCentroid`, `normalizePolygon`,
+// `SQM_PER_ACRE` and `SQM_PER_HECTARE` were all exported but used only inside
+// this module. Only `measureFarm` has a caller; the rest are internals and are
+// no longer part of the public surface.
+module.exports = { measureFarm };

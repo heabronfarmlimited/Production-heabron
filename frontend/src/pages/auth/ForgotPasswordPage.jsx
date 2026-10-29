@@ -1,5 +1,6 @@
-import { useRef, useState } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+// FIXED — useNavigate was imported but never used on this page.
+import { Link, useLocation } from 'react-router-dom';
 import { ArrowLeft, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
@@ -36,6 +37,8 @@ function CodeInput({ value, onChange }) {
           key={i}
           ref={(el) => (refs.current[i] = el)}
           inputMode="numeric"
+          autoComplete={i === 0 ? 'one-time-code' : 'off'}
+          aria-label={`Verification code digit ${i + 1} of 6`}
           maxLength={1}
           value={digits[i].trim()}
           onChange={(e) => setDigit(i, e.target.value)}
@@ -48,7 +51,6 @@ function CodeInput({ value, onChange }) {
 }
 
 export default function ForgotPasswordPage() {
-  const navigate = useNavigate();
   const location = useLocation();
   const [email, setEmail] = useState(location.state?.email || '');
   const [code, setCode] = useState('');
@@ -61,9 +63,11 @@ export default function ForgotPasswordPage() {
     e.preventDefault();
     setSubmitting(true);
     try {
-      await api.post('/auth/forgot-password', { email });
+      await api.post('/auth/forgot-password', { email: email.trim() });
       toast.success('Code sent to your email');
       setStep(2);
+    } catch {
+      /* toasted by the api interceptor */
     } finally {
       setSubmitting(false);
     }
@@ -71,20 +75,38 @@ export default function ForgotPasswordPage() {
 
   async function doReset(e) {
     e.preventDefault();
-    if (code.length !== 6) return toast.error('Enter the 6-digit code');
+    // The validator requires exactly 6 digits and a password of at least 6
+    // characters; check both before posting so the user gets a plain message.
+    if (!/^\d{6}$/.test(code)) return toast.error('Enter the 6-digit code');
+    if (newPassword.length < 6) return toast.error('Use at least 6 characters');
     setSubmitting(true);
     try {
-      await api.post('/auth/reset-password', { email, code, newPassword });
+      await api.post('/auth/reset-password', { email: email.trim(), code, newPassword });
       setDone(true);
+    } catch {
+      // FIXED — a rejected OTP left the button spinning state cleared but no
+      // feedback beyond the toast, and `setDone(true)` had been unreachable
+      // only by luck: an exception here used to propagate out of the handler.
     } finally {
       setSubmitting(false);
     }
   }
 
+  // FIXED — "Resend" could be hammered; the backend rate-limits OTPs, so a
+  // short cooldown avoids locking the user out of their own reset.
+  const [cooldown, setCooldown] = useState(0);
+  useEffect(() => {
+    if (cooldown <= 0) return undefined;
+    const t = setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
+
   async function resend() {
+    if (cooldown > 0) return;
     try {
-      await api.post('/auth/forgot-password', { email });
+      await api.post('/auth/forgot-password', { email: email.trim() });
       toast.success('New code sent');
+      setCooldown(30);
     } catch { /* toasted by interceptor */ }
   }
 
@@ -106,12 +128,12 @@ export default function ForgotPasswordPage() {
           </Link>
           <div>
             <h2 className="font-display text-3xl font-semibold text-ink">Reset Password</h2>
-            <p className="text-smoke mt-1.5 text-sm">Enter your email and we'll send a 6-digit code.</p>
+            <p className="text-smoke mt-1.5 text-sm">Enter your email and we&apos;ll send a 6-digit code.</p>
           </div>
           <Field label="Email" required>
             <Input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@organization.com" />
           </Field>
-          <Button type="submit" loading={submitting} className="w-full">Send code</Button>
+          <Button type="submit" loading={submitting} disabled={!/\S+@\S+\.\S+/.test(email.trim())} className="w-full">Send code</Button>
         </form>
       ) : (
         <form onSubmit={doReset} className="space-y-6">
@@ -133,12 +155,17 @@ export default function ForgotPasswordPage() {
             />
           </Field>
 
-          <Button type="submit" loading={submitting} className="w-full">Verify</Button>
+          <Button type="submit" loading={submitting} disabled={!/^\d{6}$/.test(code) || newPassword.length < 6} className="w-full">Verify</Button>
 
           <p className="text-center text-sm text-smoke">
-            Didn't get code?{' '}
-            <button type="button" onClick={resend} className="text-forest-600 font-medium hover:text-forest-700">
-              Resend
+            Didn&apos;t get code?{' '}
+            <button
+              type="button"
+              onClick={resend}
+              disabled={cooldown > 0}
+              className="text-forest-600 font-medium hover:text-forest-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend'}
             </button>
           </p>
         </form>

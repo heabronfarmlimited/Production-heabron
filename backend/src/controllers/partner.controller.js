@@ -3,8 +3,10 @@
 const { supabaseAdmin } = require('../config/supabase');
 const { ok, paginated, forbidden } = require('../utils/response');
 const { parsePagination } = require('../utils/pagination');
-const { shapeFarmers } = require('../utils/shapeFarmer');
+const { shapeFarmersForPartner } = require('../utils/shapeFarmer');
 const logger = require('../utils/logger');
+const { containsPattern } = require('../utils/search');
+const { chunk } = require('../utils/profiles');
 
 function riskLevel(score) {
   if (score == null) return 'unknown';
@@ -20,10 +22,15 @@ function riskLevel(score) {
  * Returns: { coopIds: Set<string>, farmerIds: Set<string> }
  */
 async function partnerScopedIds(sb, partnerId) {
-  const { data: financings } = await sb
+  // Discarded before: a failed scope lookup returned an EMPTY scope, which
+  // every caller reads as "this partner may see nothing" — so a transient
+  // error silently emptied the lender's search, portfolio and watchlist.
+  const { data: financings, error } = await sb
     .from('financing_requests')
     .select('cooperative_id, farmer_id')
-    .eq('forwarded_to_partner_id', partnerId);
+    .eq('forwarded_to_partner_id', partnerId)
+    .limit(5000);
+  if (error) throw error;
   const coopIds = new Set();
   const farmerIds = new Set();
   for (const r of financings || []) {
@@ -61,12 +68,13 @@ async function search(req, res) {
   const out = { cooperatives: [], farmers: [] };
 
   if ((type === 'all' || type === 'cooperative') && coopIds.size > 0) {
-    const { data: coops } = await sb
+    const { data: coops, error: coopErr } = await sb
       .from('cooperatives')
       .select(`id, name, state, lga, total_members, cooperative_credit_scores(average_score, cooperative_tier)`)
       .in('id', [...coopIds])
-      .ilike('name', `%${q}%`)
+      .ilike('name', containsPattern(q))
       .limit(20);
+    if (coopErr) throw coopErr;
     out.cooperatives = (coops || []).map((c) => {
       const s = Array.isArray(c.cooperative_credit_scores) ? c.cooperative_credit_scores[0] : c.cooperative_credit_scores;
       return {
@@ -84,31 +92,48 @@ async function search(req, res) {
   if (type === 'all' || type === 'farmer') {
     // Farmers visible to this partner are: (a) explicitly named in a
     // forwarded financing request, or (b) members of a forwarded cooperative.
-    const visibleFarmerIds = new Set(farmerIds);
+    //
+    // FIXED — this used to SELECT EVERY MEMBER ID of every forwarded
+    // cooperative into a JS Set, then send them all back as one
+    // `.in('id', [...])`. With a few thousand members that request URL
+    // exceeds PostgREST's limit; the resulting error was discarded, so search
+    // simply returned no farmers and looked like "no matches". The name filter
+    // now runs in the database for each branch and the two result sets are
+    // merged, so no id list is ever built.
+    const columns = `id, full_name, state, lga, credit_score, credit_tier, cooperatives(name)`;
+    const byId = new Map();
+
     if (coopIds.size > 0) {
-      const { data: members } = await sb
+      const { data: members, error: memberErr } = await sb
         .from('farmers')
-        .select('id')
-        .in('cooperative_id', [...coopIds]);
-      for (const m of members || []) visibleFarmerIds.add(m.id);
-    }
-    if (visibleFarmerIds.size > 0) {
-      const { data: farmers } = await sb
-        .from('farmers')
-        .select(`id, full_name, state, lga, credit_score, credit_tier, cooperatives(name)`)
-        .in('id', [...visibleFarmerIds])
-        .ilike('full_name', `%${q}%`)
+        .select(columns)
+        .in('cooperative_id', [...coopIds])
+        .ilike('full_name', containsPattern(q))
         .limit(20);
-      out.farmers = (farmers || []).map((f) => ({
-        id: f.id,
-        name: f.full_name,
-        cooperative: f.cooperatives?.name,
-        location: [f.lga, f.state].filter(Boolean).join(', '),
-        score: f.credit_score,
-        tier: f.credit_tier,
-        risk: riskLevel(f.credit_score),
-      }));
+      if (memberErr) throw memberErr;
+      for (const f of members || []) byId.set(f.id, f);
     }
+
+    if (farmerIds.size > 0) {
+      const { data: named, error: namedErr } = await sb
+        .from('farmers')
+        .select(columns)
+        .in('id', [...farmerIds].slice(0, 200))
+        .ilike('full_name', containsPattern(q))
+        .limit(20);
+      if (namedErr) throw namedErr;
+      for (const f of named || []) byId.set(f.id, f);
+    }
+
+    out.farmers = [...byId.values()].slice(0, 20).map((f) => ({
+      id: f.id,
+      name: f.full_name,
+      cooperative: f.cooperatives?.name,
+      location: [f.lga, f.state].filter(Boolean).join(', '),
+      score: f.credit_score,
+      tier: f.credit_tier,
+      risk: riskLevel(f.credit_score),
+    }));
   }
 
   return ok(res, out);
@@ -121,10 +146,12 @@ async function portfolio(req, res) {
   const sb = supabaseAdmin();
   const partnerId = req.user.partnerId;
 
-  const { data: financings } = await sb
+  const { data: financings, error: finErr } = await sb
     .from('financing_requests')
     .select(`*, cooperatives(id, name, state, lga, cooperative_credit_scores(*))`)
-    .eq('forwarded_to_partner_id', partnerId);
+    .eq('forwarded_to_partner_id', partnerId)
+    .limit(2000);
+  if (finErr) throw finErr;
 
   const byCoop = new Map();
   for (const f of financings || []) {
@@ -154,21 +181,30 @@ async function portfolio(req, res) {
   const tierDist = { A: 0, B: 0, C: 0, D: 0 };
   const stateDist = {};
   let totalAmount = 0;
+  const scores = [];
   for (const v of byCoop.values()) {
-    if (v.tier) tierDist[v.tier] += 1;
+    // FIXED — `tierDist[v.tier] += 1` on an unexpected tier value evaluated
+    // `undefined + 1`, writing NaN into the risk distribution the lender's
+    // chart renders.
+    if (v.tier && tierDist[v.tier] !== undefined) tierDist[v.tier] += 1;
     if (v.state) stateDist[v.state] = (stateDist[v.state] || 0) + v.totalApproved;
     totalAmount += v.totalApproved;
+    const n = Number(v.averageScore);
+    if (Number.isFinite(n)) scores.push(n);
   }
 
   return ok(res, {
     cooperatives: Array.from(byCoop.values()),
     summary: {
       totalCooperatives: byCoop.size,
-      totalAmountFinanced: totalAmount,
-      averageScore:
-        byCoop.size > 0
-          ? Array.from(byCoop.values()).reduce((s, v) => s + Number(v.averageScore || 0), 0) / byCoop.size
-          : 0,
+      totalAmountFinanced: Math.round(totalAmount * 100) / 100,
+      // FIXED — the mean divided by `byCoop.size` while counting a
+      // cooperative with no score yet as a 0. One unscored cooperative in a
+      // portfolio of three dragged the headline "average score" down by a
+      // third. Only cooperatives that actually have a score are averaged.
+      averageScore: scores.length > 0
+        ? Math.round((scores.reduce((s, n) => s + n, 0) / scores.length) * 10) / 10
+        : null,
     },
     riskDistribution: tierDist,
     geographicDistribution: stateDist,
@@ -181,12 +217,14 @@ async function watchlist(req, res) {
   const { coopIds } = await partnerScopedIds(sb, partnerId);
   if (coopIds.size === 0) return ok(res, []);
 
-  const { data } = await sb
+  const { data, error } = await sb
     .from('cooperative_credit_scores')
     .select(`*, cooperatives(id, name, state, lga)`)
     .in('cooperative_id', [...coopIds])
     .in('cooperative_tier', ['C', 'D'])
-    .order('average_score', { ascending: true });
+    .order('average_score', { ascending: true })
+    .limit(500);
+  if (error) throw error;
   return ok(res, data || []);
 }
 
@@ -199,7 +237,12 @@ async function getMyOrganization(req, res) {
   const partnerId = req.user.partnerId;
   if (!partnerId) return forbidden(res, 'Partner ID missing on user');
 
-  const { data: partner } = await sb.from('partners').select('*').eq('id', partnerId).maybeSingle();
+  const { data: partner, error: partnerErr } = await sb
+    .from('partners')
+    .select('*')
+    .eq('id', partnerId)
+    .maybeSingle();
+  if (partnerErr) throw partnerErr;
   if (!partner) return ok(res, null);
 
   // Count linked seats + financing activity for the profile header
@@ -239,7 +282,12 @@ async function updateMyOrganization(req, res) {
   if (req.body.contactName !== undefined) patch.contact_name = req.body.contactName;
 
   if (Object.keys(patch).length === 0) {
-    const { data: current } = await sb.from('partners').select('*').eq('id', partnerId).maybeSingle();
+    const { data: current, error: curErr } = await sb
+      .from('partners')
+      .select('*')
+      .eq('id', partnerId)
+      .maybeSingle();
+    if (curErr) throw curErr;
     return ok(res, current);
   }
 
@@ -274,7 +322,7 @@ async function browseCooperatives(req, res) {
     { count: 'exact' }
   );
   if (agentId) q = q.eq('created_by_agent_id', agentId);
-  if (term) q = q.ilike('name', `%${term}%`);
+  if (term) q = q.ilike('name', containsPattern(term));
   if (state) q = q.eq('state', state);
   if (lga) q = q.eq('lga', lga);
   if (crop) q = q.contains('crops_supported', [crop]);
@@ -309,7 +357,7 @@ async function browseFarmers(req, res) {
   );
   if (agentId) q = q.eq('created_by_agent_id', agentId);
   if (cooperativeId) q = q.eq('cooperative_id', cooperativeId);
-  if (term) q = q.ilike('full_name', `%${term}%`);
+  if (term) q = q.ilike('full_name', containsPattern(term));
   if (state) q = q.eq('state', state);
   if (lga) q = q.eq('lga', lga);
   if (tier) q = q.eq('credit_tier', tier);
@@ -317,7 +365,9 @@ async function browseFarmers(req, res) {
 
   const { data, count, error } = await q;
   if (error) throw error;
-  return paginated(res, shapeFarmers(data || []), { page, pageSize, total: count || 0 });
+  // Masked — see `maskFarmerIdentity`: this endpoint was returning every
+  // farmer's NIN, BVN, phone, address and ID-document URL to any lender.
+  return paginated(res, shapeFarmersForPartner(data || []), { page, pageSize, total: count || 0 });
 }
 
 // GET /partner/cooperatives/:cooperativeId/farmers
@@ -334,22 +384,36 @@ async function browseCooperativeFarmers(req, res) {
     .order('full_name', { ascending: true })
     .range(from, to);
   if (error) throw error;
-  return paginated(res, shapeFarmers(data || []), { page, pageSize, total: count || 0 });
+  return paginated(res, shapeFarmersForPartner(data || []), { page, pageSize, total: count || 0 });
 }
 
 // GET /partner/field-agents  — list of agents (to filter the directory by who manages farmers)
 async function fieldAgents(req, res) {
   const sb = supabaseAdmin();
-  const { data: roles } = await sb.from('user_roles').select('user_id').eq('role', 'field_agent');
-  const ids = (roles || []).map((r) => r.user_id);
+  const { data: roles, error: roleErr } = await sb
+    .from('user_roles')
+    .select('user_id')
+    .eq('role', 'field_agent')
+    .limit(5000);
+  if (roleErr) throw roleErr;
+  const ids = [...new Set((roles || []).map((r) => r.user_id).filter(Boolean))];
   if (ids.length === 0) return ok(res, []);
-  const { data: profiles } = await sb
-    .from('profiles')
-    .select('user_id, full_name, state')
-    .in('user_id', ids)
-    .eq('status', 'active')
-    .order('full_name', { ascending: true });
-  return ok(res, profiles || []);
+
+  // Chunked — a long `.in()` list previously returned an error that was
+  // discarded, emptying the agent filter on the lender's directory.
+  const out = [];
+  for (const group of chunk(ids)) {
+    const { data: profiles, error } = await sb
+      .from('profiles')
+      .select('user_id, full_name, state')
+      .in('user_id', group)
+      .eq('status', 'active')
+      .order('full_name', { ascending: true });
+    if (error) throw error;
+    out.push(...(profiles || []));
+  }
+  out.sort((a, b) => String(a.full_name || '').localeCompare(String(b.full_name || '')));
+  return ok(res, out);
 }
 
 module.exports = { search, portfolio, watchlist, partnerScopedIds, getMyOrganization, updateMyOrganization, browseCooperatives, browseFarmers, browseCooperativeFarmers, fieldAgents };

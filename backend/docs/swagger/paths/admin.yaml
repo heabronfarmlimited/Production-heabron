@@ -519,7 +519,24 @@
             required: [decision]
             properties:
               decision: { type: string, enum: [approve, reject] }
-              adminNotes: { type: string }
+              adminNotes:
+                type: string
+                maxLength: 500
+                description: Required when rejecting.
+              referenceNumber:
+                type: string
+                maxLength: 100
+                description: >
+                  Bank transfer reference for the payout. Recorded on the
+                  resulting wallet transaction. Only meaningful when approving.
+              receiptImageUrl:
+                type: string
+                format: uri
+                description: >
+                  Proof of payment for the payout, stored against the wallet
+                  transaction so the agent can see what backed it. Upload via
+                  POST /admin/uploads/transaction_receipt first and pass the
+                  returned URL. Only meaningful when approving.
     responses:
       '200': { description: Decision recorded, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
 

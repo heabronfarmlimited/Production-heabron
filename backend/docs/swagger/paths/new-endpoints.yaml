@@ -6,16 +6,19 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
-# AGENT — farmer financing history
+# ADMIN — farmer financing history
 # ---------------------------------------------------------------------------
-/agent/farmers/{farmerId}/financing-history:
+# NOTE: this is admin-scoped. It was previously documented under /agent, where
+# it does not exist. Field agents read a farmer's financing through
+# GET /agent/financing-requests?farmerId=<id> instead.
+/admin/farmers/{farmerId}/financing-history:
   parameters:
     - name: farmerId
       in: path
       required: true
       schema: { type: string, format: uuid }
   get:
-    tags: [Agent — Farmers]
+    tags: [Admin — Farmers]
     summary: Full financing history for one farmer
     description: >
       Returns every financing request tied to this farmer (direct + cooperative-level),
@@ -63,7 +66,7 @@
 # ---------------------------------------------------------------------------
 /admin/disbursements:
   post:
-    tags: [Admin — Wallet]
+    tags: [Admin — Wallets]
     summary: Record a manual transfer of cash to a field agent (with receipt proof)
     description: Credits the agent's wallet and creates a credit wallet_transaction visible in the agent's history.
     requestBody:
@@ -89,7 +92,7 @@
 
 /admin/transactions:
   get:
-    tags: [Admin — Wallet]
+    tags: [Admin — Wallets]
     summary: List all wallet transactions
     parameters:
       - { name: source, in: query, schema: { type: string } }
@@ -105,7 +108,7 @@
 # ---------------------------------------------------------------------------
 /admin/cash-purchases:
   get:
-    tags: [Admin — Wallet]
+    tags: [Admin — Wallets]
     summary: List field-agent purchase proofs
     parameters:
       - { name: status, in: query, schema: { type: string, enum: [pending, completed, failed] } }
@@ -121,7 +124,7 @@
       required: true
       schema: { type: string, format: uuid }
   post:
-    tags: [Admin — Wallet]
+    tags: [Admin — Wallets]
     summary: Confirm or reject a field-agent purchase proof
     requestBody:
       required: true
@@ -137,27 +140,33 @@
       '200': { description: Updated status, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
 
 # ---------------------------------------------------------------------------
-# AGENT + ADMIN — PDF export data
+# ADMIN — PDF export data
 # ---------------------------------------------------------------------------
-/agent/exports/agent:
+# NOTE: these are admin-scoped. They were previously documented under /agent,
+# where they do not exist. The mobile app does not use them — it renders its
+# PDFs on-device from data it has already loaded (see useFarmerExport).
+/admin/exports/agent:
   get:
-    tags: [Agent — Exports]
+    tags: [Admin — Exports]
     summary: Structured data for the Agent PDF export
+    parameters:
+      - $ref: '#/components/parameters/PageParam'
+      - $ref: '#/components/parameters/PageSizeParam'
     responses:
       '200': { description: Export payload, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
-/agent/exports/farmer/{farmerId}:
+/admin/exports/farmer/{farmerId}:
   parameters:
     - { name: farmerId, in: path, required: true, schema: { type: string, format: uuid } }
   get:
-    tags: [Agent — Exports]
+    tags: [Admin — Exports]
     summary: Structured data for the Farmer PDF export
     responses:
       '200': { description: Export payload, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }
-/agent/exports/cooperative/{cooperativeId}:
+/admin/exports/cooperative/{cooperativeId}:
   parameters:
     - { name: cooperativeId, in: path, required: true, schema: { type: string, format: uuid } }
   get:
-    tags: [Agent — Exports]
+    tags: [Admin — Exports]
     summary: Structured data for the Cooperative PDF export
     responses:
       '200': { description: Export payload, content: { application/json: { schema: { $ref: '#/components/schemas/SuccessEnvelope' } } } }

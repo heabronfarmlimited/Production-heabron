@@ -2,18 +2,18 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { ArrowLeft, RefreshCw, MapPin, Users, Phone } from 'lucide-react';
 import api from '@/lib/api';
-import { Card, MetricCard, TierPill, Skeleton } from '@/components/ui/Card';
+import { Card, MetricCard, TierPill, Skeleton, StatusPill } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip } from 'recharts';
-import { formatDate, formatNaira, formatNumber } from '@/lib/utils';
+import { formatDate, formatNaira, formatNumber, formatScore } from '@/lib/utils';
 import toast from 'react-hot-toast';
 
 export default function CooperativeDetailPage() {
   const { cooperativeId } = useParams();
   const navigate = useNavigate();
 
-  const { data: report, isLoading, refetch } = useQuery({
+  const { data: report, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['admin-coop-report', cooperativeId],
     queryFn: () => api.get(`/admin/credit/cooperatives/${cooperativeId}/report`),
   });
@@ -24,21 +24,40 @@ export default function CooperativeDetailPage() {
   });
 
   if (isLoading) return <Skeleton className="h-64" />;
-  if (!report?.cooperative) return <Card><p className="text-center py-12">Cooperative not found.</p></Card>;
+  // FIXED — a load failure and a missing cooperative rendered the same bare
+  // "not found" card with no way back.
+  if (isError || !report?.cooperative) {
+    return (
+      <Card padded>
+        <p className="py-10 text-center text-smoke">
+          {isError
+            ? `Could not load this cooperative${error?.message ? `: ${error.message}` : ''}.`
+            : 'This cooperative no longer exists.'}
+        </p>
+        <div className="flex justify-center">
+          <Button variant="secondary" onClick={() => navigate('/admin/cooperatives')}>Back to cooperatives</Button>
+        </div>
+      </Card>
+    );
+  }
 
   const c = report.cooperative;
   const s = report.score;
-  const trend = (report.scoreTrend || []).map((h, i) => ({ idx: i + 1, score: Number(h.final_score) }));
+  // Only keep points that are actually numeric — a null final_score produced a
+  // NaN datum that silently broke the whole recharts line.
+  const trend = (Array.isArray(report.scoreTrend) ? report.scoreTrend : [])
+    .map((h, i) => ({ idx: i + 1, score: Number(h.final_score) }))
+    .filter((p) => Number.isFinite(p.score));
 
   return (
     <>
-      <button onClick={() => navigate(-1)} className="mb-4 inline-flex items-center gap-2 text-sm text-smoke hover:text-ink">
+      <button type="button" onClick={() => navigate(-1)} className="mb-4 inline-flex items-center gap-2 text-sm text-smoke hover:text-ink">
         <ArrowLeft className="size-4" /> Back
       </button>
 
       <PageHeader
         eyebrow="Cooperative"
-        title={c.name}
+        title={c.name || 'Cooperative'}
         description={[c.lga, c.state].filter(Boolean).join(', ')}
         actions={
           <Button onClick={() => recalc.mutate()} loading={recalc.isPending}>
@@ -48,7 +67,9 @@ export default function CooperativeDetailPage() {
       />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <MetricCard label="Average score" value={s?.average_score?.toFixed(1) || '—'} sub={s?.cooperative_tier ? `Tier ${s.cooperative_tier}` : ''} tone="primary" />
+        {/* FIXED — `s.average_score.toFixed(1)` threw when Postgres returned
+            the NUMERIC as a string, and printed nothing when the score was 0. */}
+        <MetricCard label="Average score" value={formatScore(s?.average_score)} sub={s?.cooperative_tier ? `Tier ${s.cooperative_tier}` : 'Unscored'} tone="primary" />
         <MetricCard label="Total members" value={formatNumber(s?.total_farmers || c.total_members || 0)} icon={Users} />
         <MetricCard label="Scored" value={formatNumber(s?.scored_farmers || 0)} />
         <MetricCard label="Tier D members" value={formatNumber(s?.tier_d_count || 0)} sub="At-risk" />
@@ -96,8 +117,8 @@ export default function CooperativeDetailPage() {
           <KV label="Crops" value={(c.crops_supported || []).join(', ') || '—'} />
           <KV label="Estimated land" value={c.estimated_land_size ? `${c.estimated_land_size} acres` : '—'} />
           <KV label="Created" value={formatDate(c.created_at)} />
-          <KV label="State" value={c.state} icon={MapPin} />
-          <KV label="LGA" value={c.lga} />
+          <KV label="State" value={c.state || '—'} icon={MapPin} />
+          <KV label="LGA" value={c.lga || '—'} />
           <KV label="Address" value={c.address || '—'} />
         </dl>
       </Card>
@@ -105,13 +126,16 @@ export default function CooperativeDetailPage() {
       <Card padded className="mb-6">
         <p className="eyebrow mb-1">Members</p>
         <h3 className="font-display text-xl font-semibold mb-4">{formatNumber((report.members || []).length)} farmers</h3>
+        {(report.members || []).length === 0 && (
+          <p className="text-sm text-smoke py-6 text-center">No farmers registered to this cooperative yet.</p>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr className="text-left text-xs uppercase text-smoke border-b border-whisper/60">
               <th className="py-2 pr-4">Name</th><th className="py-2 pr-4">Tier</th><th className="py-2 pr-4 text-right">Score</th>
             </tr></thead>
             <tbody>
-              {(report.members || []).map((m) => {
+              {(Array.isArray(report.members) ? report.members : []).map((m) => {
                 const score = Array.isArray(m.credit_scores) ? m.credit_scores[0] : m.credit_scores;
                 return (
                   <tr
@@ -121,7 +145,7 @@ export default function CooperativeDetailPage() {
                   >
                     <td className="py-2 pr-4 font-medium">{m.full_name}</td>
                     <td className="py-2 pr-4"><TierPill tier={score?.credit_tier} /></td>
-                    <td className="py-2 pr-4 tabular text-right">{score?.final_credit_score != null ? Number(score.final_credit_score).toFixed(1) : '—'}</td>
+                    <td className="py-2 pr-4 tabular text-right">{formatScore(score?.final_credit_score)}</td>
                   </tr>
                 );
               })}
@@ -133,7 +157,7 @@ export default function CooperativeDetailPage() {
       <Card padded>
         <p className="eyebrow mb-1">Loans</p>
         <h3 className="font-display text-xl font-semibold mb-4">Financing history</h3>
-        {(report.financingHistory || []).length === 0 ? (
+        {!Array.isArray(report.financingHistory) || report.financingHistory.length === 0 ? (
           <p className="text-sm text-smoke py-6 text-center">No financing history yet.</p>
         ) : (
           <table className="w-full text-sm">
@@ -145,8 +169,8 @@ export default function CooperativeDetailPage() {
                 <tr key={f.id} className="border-b border-whisper/40 last:border-0">
                   <td className="py-2 pr-4">{formatDate(f.created_at)}</td>
                   <td className="py-2 pr-4 font-semibold">{formatNaira(f.loan_amount)}</td>
-                  <td className="py-2 pr-4">{f.purpose}</td>
-                  <td className="py-2 pr-4 capitalize">{f.status}</td>
+                  <td className="py-2 pr-4">{f.purpose || '—'}</td>
+                  <td className="py-2 pr-4"><StatusPill status={f.status} /></td>
                 </tr>
               ))}
             </tbody>

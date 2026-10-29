@@ -8,25 +8,29 @@ import api from '@/lib/api';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { MetricCard, Card, TierPill, Skeleton } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { formatNaira, formatNumber, relativeTime } from '@/lib/utils';
+import { formatNaira, formatNumber, relativeTime, humanize } from '@/lib/utils';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 
 const TIER_COLORS = { A: '#2C6B47', B: '#4F8E6C', C: '#E0A82E', D: '#C84B4B' };
 
 export default function AdminDashboardPage() {
   const navigate = useNavigate();
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['admin-dashboard'],
     queryFn: () => api.get('/admin/dashboard'),
   });
 
-  const tierData = data
-    ? Object.entries(data.cooperativeTierDistribution || {}).map(([tier, count]) => ({ name: `Tier ${tier}`, value: count, tier }))
-    : [];
+  const tierData = Object.entries(data?.cooperativeTierDistribution || {})
+    .map(([tier, count]) => ({ name: `Tier ${tier}`, value: Number(count) || 0, tier }));
 
-  const financingData = data
-    ? Object.entries(data.financing || {}).map(([status, count]) => ({ status, count }))
-    : [];
+  const financingData = Object.entries(data?.financing || {})
+    .map(([status, count]) => ({ status: humanize(status), count: Number(count) || 0 }));
+
+  // FIXED — `data?.totals.farmers` only guarded `data`; if the dashboard
+  // responded without a `totals` block the whole page threw. Read through a
+  // defaulted object instead.
+  const totals = data?.totals || {};
+  const money = data?.money || {};
 
   return (
     <>
@@ -46,6 +50,16 @@ export default function AdminDashboardPage() {
         }
       />
 
+      {/* FIXED — the dashboard had no error state: a failed request rendered
+          zeroes everywhere, which reads as "the platform is empty". */}
+      {isError && (
+        <Card padded className="mb-6 border-red-200 bg-red-50/60">
+          <p className="text-sm text-red-700">
+            Could not load the dashboard{error?.message ? `: ${error.message}` : ''}. The figures below are unavailable, not zero.
+          </p>
+        </Card>
+      )}
+
       {/* Key metrics */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {isLoading ? (
@@ -56,26 +70,27 @@ export default function AdminDashboardPage() {
           <>
             <MetricCard
               label="Farmers"
-              value={formatNumber(data?.totals.farmers)}
+              value={formatNumber(totals.farmers)}
               icon={Sprout}
               tone="primary"
               to="/admin/farmers"
             />
             <MetricCard
               label="Cooperatives"
-              value={formatNumber(data?.totals.cooperatives)}
+              value={formatNumber(totals.cooperatives)}
               icon={Users}
               to="/admin/cooperatives"
             />
             <MetricCard
               label="Field Agents"
-              value={formatNumber(data?.totals.fieldAgents)}
+              value={formatNumber(totals.fieldAgents)}
               icon={UserCheck}
               to="/admin/agents"
             />
             <MetricCard
               label="Disbursed to agents"
-              value={formatNaira(data?.money?.actualDisbursedToAgents ?? 0)}
+              value={formatNaira(money.actualDisbursedToAgents ?? 0)}
+              sub="Cash actually transferred"
               icon={Banknote}
               tone="accent"
               to="/admin/wallets"
@@ -142,6 +157,11 @@ export default function AdminDashboardPage() {
               View all <ArrowUpRight className="size-4" />
             </Button>
           </div>
+          {/* FIXED — rendered an empty axis frame when there was no financing
+              at all, with no indication that it was empty rather than broken. */}
+          {financingData.every((d) => d.count === 0) ? (
+            <p className="text-sm text-smoke py-12 text-center">No financing requests yet</p>
+          ) : (
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={financingData}>
               <XAxis dataKey="status" tick={{ fontSize: 11, fill: '#6B7370' }} axisLine={false} tickLine={false} />
@@ -150,6 +170,7 @@ export default function AdminDashboardPage() {
               <Bar dataKey="count" fill="#2C6B47" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+          )}
         </Card>
       </div>
 
@@ -165,7 +186,10 @@ export default function AdminDashboardPage() {
           </Button>
         </div>
         <div className="space-y-3">
-          {(data?.recentActivity || []).slice(0, 10).map((a) => (
+          {/* The dashboard returns raw activity_logs rows (no joined actor), so
+              only the action itself is available here — the Activity Log page
+              resolves names. */}
+          {(Array.isArray(data?.recentActivity) ? data.recentActivity : []).slice(0, 10).map((a) => (
             <div key={a.id} className="flex items-start gap-3 py-2 border-b border-whisper/40 last:border-0">
               <div className="size-9 rounded-lg bg-bone flex items-center justify-center text-forest-500 text-sm font-bold mt-0.5">
                 <TrendingUp className="size-4" />
@@ -173,8 +197,9 @@ export default function AdminDashboardPage() {
               <div className="flex-1 min-w-0">
                 <p className="text-sm">
                   {a.actor?.full_name && <span className="font-medium text-ink">{a.actor.full_name} </span>}
-                  <span className={a.actor?.full_name ? 'text-smoke' : 'font-medium text-ink'}>{a.action.replace(/_/g, ' ')}</span>
-                  {a.entity_type && <span className="text-smoke"> · {a.entity_type.replace(/_/g, ' ')}</span>}
+                  {/* FIXED — `a.action.replace()` threw on a row with a null action. */}
+                  <span className={a.actor?.full_name ? 'text-smoke' : 'font-medium text-ink'}>{String(a.action || 'activity').replace(/_/g, ' ')}</span>
+                  {a.entity_type && <span className="text-smoke"> · {String(a.entity_type).replace(/_/g, ' ')}</span>}
                 </p>
                 <p className="text-xs text-smoke">{relativeTime(a.created_at)}</p>
               </div>
@@ -191,7 +216,7 @@ export default function AdminDashboardPage() {
 
 /** Admin work queue — only shows queues that actually have items waiting. */
 function ActionRequired({ data, navigate }) {
-  const ar = data.actionRequired || {};
+  const ar = data?.actionRequired || {};
   const items = [
     { key: 'financingRequests', count: ar.financingRequests, label: 'Financing requests', sub: 'Awaiting your decision', icon: ClipboardList, to: '/admin/financing' },
     { key: 'agentApplications', count: ar.agentApplications, label: 'Agent applications', sub: 'KYC awaiting review', icon: FileCheck, to: '/admin/applications' },
@@ -211,7 +236,7 @@ function ActionRequired({ data, navigate }) {
         {items.map((i) => {
           const Icon = i.icon;
           return (
-            <button
+            <button type="button"
               key={i.key}
               onClick={() => navigate(i.to)}
               className="text-left bg-white rounded-xl border border-whisper p-4 hover:border-forest-300 hover:shadow-card transition group"

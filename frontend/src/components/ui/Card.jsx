@@ -33,8 +33,24 @@ export function StatusPill({ status, className }) {
     approved: 'status-active',
     disbursed: 'status-active',
     completed: 'status-active',
+    // FIXED — verification_status ('verified' | 'mismatch' | 'failed') and
+    // wallet transaction_status were rendered with the grey neutral pill, so a
+    // verified NIN looked identical to an unknown one.
+    verified: 'status-active',
+    mismatch: 'status-pending',
+    failed: 'status-rejected',
+    reversed: 'status-rejected',
+    frozen: 'status-suspended',
   };
-  return <span className={cn(map[status] || 'pill-neutral', 'capitalize', className)}>{status}</span>;
+  // FIXED — a null/undefined status rendered an empty pill. Show an em-dash.
+  if (status === null || status === undefined || status === '') {
+    return <span className={cn('pill-neutral', className)}>—</span>;
+  }
+  return (
+    <span className={cn(map[status] || 'pill-neutral', 'capitalize', className)}>
+      {String(status).replace(/_/g, ' ')}
+    </span>
+  );
 }
 
 export function EmptyState({ icon: Icon, title, description, action }) {
@@ -69,13 +85,24 @@ export function MetricCard({ label, value, sub, tone = 'default', icon: Icon, to
     if (onClick) return onClick();
     if (to && navigate) navigate(to);
   };
+  // FIXED — a clickable card was a bare `<div onClick>`: not focusable, not
+  // operable from the keyboard and invisible to screen readers. It now carries
+  // a button role, a tab stop, a keyboard handler and an accessible name.
+  // (A real button element would be cleaner, but the card's body is <p>
+  // elements, which are not valid children of a button.)
   return (
     <div
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      aria-label={clickable ? `${label}: ${value}` : undefined}
       onClick={clickable ? handle : undefined}
+      onKeyDown={clickable ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handle(); }
+      } : undefined}
       className={cn(
         'card card-pad relative overflow-hidden transition-all',
         tones[tone],
-        clickable && 'cursor-pointer hover:shadow-md hover:-translate-y-0.5 group'
+        clickable && 'cursor-pointer hover:shadow-md hover:-translate-y-0.5 group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-forest-500/40'
       )}
     >
       <div className="flex items-start justify-between">
@@ -94,7 +121,7 @@ export function MetricCard({ label, value, sub, tone = 'default', icon: Icon, to
         )}
       </div>
       {clickable && (
-        <ArrowUpRight className={cn(
+        <ArrowUpRight aria-hidden="true" className={cn(
           'size-4 absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity',
           tone === 'primary' ? 'text-white' : 'text-forest-500'
         )} />

@@ -108,7 +108,10 @@ router.get('/credit/cooperatives/:cooperativeId/report', requireParamUuid('coope
 
 // --- Benchmarks ---
 router.get('/benchmarks', validate(v.listQuery, 'query'), asyncHandler(benchmarks.list));
-router.post('/benchmarks', asyncHandler(benchmarks.upsert));
+// FIXED — this POST had NO validator. Every farmer's yield score divides by
+// `benchmark_yield_tonnes_per_hectare`, so an unvalidated write here silently
+// zeroed the production score of every farmer growing that crop in that state.
+router.post('/benchmarks', validate(v.upsertBenchmark), asyncHandler(benchmarks.upsert));
 
 // --- Wallet / settlements / manual payment flow ---
 router.get('/wallets', validate(v.listQuery, 'query'), asyncHandler(adminWallet.listAllWallets));

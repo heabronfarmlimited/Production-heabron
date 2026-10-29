@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Eye, EyeOff, ArrowRight, X, KeyRound } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { useAuth } from '@/lib/auth';
+import { useAuth, ADMIN_ROLES, PARTNER_ROLES } from '@/lib/auth';
 import { BRAND } from '@/lib/brand';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/Button';
@@ -14,11 +14,15 @@ export function AuthLayout({ children }) {
     <div className="min-h-screen grid lg:grid-cols-2 bg-white">
       {/* Left — green hero */}
       <div className="relative hidden lg:flex flex-col justify-end overflow-hidden">
+        {/* FIXED — the sign-in hero hot-linked an Unsplash stock photo, so the
+            login screen made a third-party request before authentication and
+            showed a bare gradient band whenever that CDN was unreachable (and
+            the image carried no licence record). Brand gradient instead. */}
         <div
-          className="absolute inset-0 bg-cover bg-center"
+          className="absolute inset-0"
           style={{
             backgroundImage:
-              "linear-gradient(135deg, rgba(27,64,41,0.92), rgba(44,107,71,0.78) 55%, rgba(224,168,46,0.55)), url('https://images.unsplash.com/photo-1625246333195-78d9c38ad449?q=80&w=1200&auto=format&fit=crop')",
+              'linear-gradient(135deg, #1B4029 0%, #235638 35%, #2C6B47 62%, #B98724 115%)',
           }}
         />
         <svg className="absolute inset-0 size-full text-white/5" preserveAspectRatio="none" viewBox="0 0 100 100">
@@ -77,15 +81,24 @@ export default function LoginPage() {
     setError(null);
     setSubmitting(true);
     try {
-      const data = await login(email, password);
-      if (data.user?.mustChangePassword) {
+      const data = await login(email.trim(), password);
+      if (data?.user?.mustChangePassword) {
         navigate('/change-password');
         return;
       }
-      const dest = data.user?.role?.startsWith('partner') ? '/partner' : '/admin';
-      navigate(location.state?.from?.pathname || dest);
+      // FIXED — role was only tested with startsWith('partner'), so any role
+      // that is neither admin nor partner (a field_agent signing in to the web
+      // dashboard, or a user with no role row) was sent to /admin and bounced
+      // back and forth. Route explicitly and let App's guards show the
+      // no-access screen for anything else.
+      const role = data?.user?.role;
+      const dest = PARTNER_ROLES.includes(role) ? '/partner' : ADMIN_ROLES.includes(role) ? '/admin' : '/';
+      // Only honour a redirect that stays inside the portal the role can use.
+      const from = location.state?.from?.pathname;
+      const allowed = typeof from === 'string' && from.startsWith(dest) ? from : dest;
+      navigate(allowed, { replace: true });
     } catch (err) {
-      setError(err.response?.data?.error?.message || 'Sign in failed');
+      setError(err.response?.data?.error?.message || err.message || 'Sign in failed');
     } finally {
       setSubmitting(false);
     }
@@ -112,9 +125,12 @@ export default function LoginPage() {
 
         <Field label="Password" required>
           <div className="relative">
+            {/* This Input sits inside a wrapper div, so Field can't label it
+                automatically — give it an explicit accessible name. */}
             <Input
               type={showPassword ? 'text' : 'password'}
               autoComplete="current-password"
+              aria-label="Password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -124,6 +140,8 @@ export default function LoginPage() {
             <button
               type="button"
               onClick={() => setShowPassword((v) => !v)}
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              aria-pressed={showPassword}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-smoke hover:text-ink"
             >
               {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
@@ -174,19 +192,26 @@ function ResetPasswordModal({ email: initialEmail, onClose }) {
   const [busy, setBusy] = useState(false);
 
   function maskEmail(e) {
-    if (!e || !e.includes('@')) return e;
-    const [name, domain] = e.split('@');
-    const shown = name.slice(0, 1) + '*****' + name.slice(-2);
-    return `${shown}@${domain}`;
+    // FIXED — for a one- or two-character local part `slice(0,1)+…+slice(-2)`
+    // echoed the whole thing back, defeating the mask.
+    if (!e || typeof e !== 'string' || !e.includes('@')) return e || '';
+    const at = e.lastIndexOf('@');
+    const name = e.slice(0, at);
+    const domain = e.slice(at + 1);
+    if (name.length <= 3) return `${name[0] || ''}*****@${domain}`;
+    return `${name.slice(0, 1)}*****${name.slice(-2)}@${domain}`;
   }
 
   async function sendLink() {
-    if (!email) return toast.error('Enter your email first');
+    const addr = email.trim();
+    // FIXED — only checked for a non-empty string, so a typo'd address 422'd
+    // with an unreadable validation error.
+    if (!/\S+@\S+\.\S+/.test(addr)) return toast.error('Enter a valid email address');
     setBusy(true);
     try {
-      await api.post('/auth/forgot-password', { email });
+      await api.post('/auth/forgot-password', { email: addr });
       toast.success('Reset code sent');
-      navigate('/forgot-password', { state: { email, step: 2 } });
+      navigate('/forgot-password', { state: { email: addr, step: 2 } });
     } catch {
       /* api interceptor toasts the error */
     } finally {
@@ -196,15 +221,15 @@ function ResetPasswordModal({ email: initialEmail, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4 animate-fade-in">
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-elev p-7 relative">
-        <button onClick={onClose} className="absolute right-4 top-4 text-smoke hover:text-ink">
+      <div role="dialog" aria-modal="true" aria-labelledby="reset-pw-title" className="w-full max-w-sm bg-white rounded-2xl shadow-elev p-7 relative">
+        <button type="button" onClick={onClose} aria-label="Close dialog" className="absolute right-4 top-4 text-smoke hover:text-ink">
           <X className="size-5" />
         </button>
 
         <div className="size-14 rounded-full bg-forest-50 flex items-center justify-center mx-auto mb-4">
           <KeyRound className="size-6 text-forest-500" />
         </div>
-        <h3 className="font-display text-xl font-semibold text-center text-ink">Reset Your password?</h3>
+        <h3 id="reset-pw-title" className="font-display text-xl font-semibold text-center text-ink">Reset Your password?</h3>
 
         {initialEmail ? (
           <p className="text-sm text-smoke text-center mt-1.5">
@@ -218,8 +243,9 @@ function ResetPasswordModal({ email: initialEmail, onClose }) {
           </div>
         )}
 
+        {/* The endpoint sends a 6-digit code, not a link. */}
         <Button onClick={sendLink} loading={busy} className="w-full mt-6">
-          Send link
+          Send code
         </Button>
       </div>
     </div>

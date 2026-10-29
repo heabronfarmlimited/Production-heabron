@@ -1,0 +1,2109 @@
+# =============================================================================
+# GENERATED — do not hand-edit.
+#
+# Produced by `node scripts/gen-swagger-stubs.js --write` for the routes that
+# `node scripts/check-swagger.js` reported as registered but undocumented.
+#
+# Request bodies and query parameters are derived from the same Joi validators
+# that Express validates against (src/validators/domain.js), so this file
+# cannot describe a shape the API would reject. Summaries come from the
+# controller handler names — refine them in place if you move an operation
+# into one of the hand-written path files, and delete it from here.
+# =============================================================================
+/:
+  get:
+    tags:
+      - Health
+    summary: API root — service name, version and docs link
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/auth/uploads/{kind}:
+  post:
+    tags:
+      - Auth
+    summary: Upload pre activation
+    parameters:
+      - name: kind
+        in: path
+        required: true
+        description: Storage bucket to upload into.
+        schema:
+          type: string
+          enum:
+            - avatar
+            - selfie
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required:
+              - file
+            properties:
+              file:
+                type: string
+                format: binary
+    responses:
+      "201":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/auth/resubmit-nin:
+  post:
+    tags:
+      - Auth
+    summary: Resubmit nin
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              firstName:
+                type: string
+                minLength: 1
+                maxLength: 60
+              lastName:
+                type: string
+                minLength: 1
+                maxLength: 60
+              nin:
+                type: string
+                pattern: ^\d{11}$
+              dateOfBirth:
+                type: string
+                format: date-time
+            required:
+              - firstName
+              - lastName
+              - nin
+              - dateOfBirth
+    responses:
+      "201":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/agent/bank-account:
+  get:
+    tags:
+      - Agent — Profile
+    summary: Get bank account
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+  put:
+    tags:
+      - Agent — Profile
+    summary: Save bank account
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              bankName:
+                type: string
+                minLength: 2
+                maxLength: 120
+              accountNumber:
+                type: string
+                pattern: ^\d{10}$
+              accountName:
+                type: string
+                minLength: 2
+                maxLength: 120
+            required:
+              - bankName
+              - accountNumber
+              - accountName
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/agent/farmers/{farmerId}/map-farm:
+  post:
+    tags:
+      - Agent — Farmers
+    summary: Map farm
+    parameters:
+      - name: farmerId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              gpsPolygon:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    lat:
+                      type: number
+                      minimum: -90
+                      maximum: 90
+                    lng:
+                      type: number
+                      minimum: -180
+                      maximum: 180
+                  required:
+                    - lat
+                    - lng
+                minItems: 3
+              overrideSizeAcres:
+                type: number
+                minimum: 0
+            required:
+              - gpsPolygon
+    responses:
+      "201":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/agent/farmers/{farmerId}/seasonal-yield:
+  get:
+    tags:
+      - Agent — Farmers
+    summary: Farmer seasonal yield
+    parameters:
+      - name: farmerId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/agent/farmers/{farmerId}/market-access:
+  get:
+    tags:
+      - Agent — Farmers
+    summary: List by farmer
+    parameters:
+      - name: farmerId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaginatedEnvelope"
+/agent/farmers/{farmerId}/field-notes:
+  get:
+    tags:
+      - Agent — Farmers
+    summary: List by farmer
+    parameters:
+      - name: farmerId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaginatedEnvelope"
+/agent/productions/{productionId}:
+  get:
+    tags:
+      - Agent — Production
+    summary: Get by id
+    parameters:
+      - name: productionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+  patch:
+    tags:
+      - Agent — Production
+    summary: Update
+    parameters:
+      - name: productionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              cycleNumber:
+                type: integer
+                minimum: 1
+                default: 1
+              season:
+                type: string
+              crop:
+                type: string
+              farmSizeAcres:
+                type: number
+                minimum: 0
+              expectedPlantingDate:
+                type: string
+                format: date-time
+              expectedHarvestDate:
+                type: string
+                format: date-time
+              expectedYieldTonnes:
+                type: number
+                minimum: 0
+              actualYieldTonnes:
+                type: number
+                minimum: 0
+              benchmarkYieldTonnes:
+                type: number
+                minimum: 0
+              harvestDate:
+                type: string
+                format: date-time
+              harvestPhotoUrls:
+                type: array
+                items:
+                  type: string
+                  format: uri
+              warehouseReceiptUrl:
+                type: string
+                format: uri
+              buyerReceiptUrl:
+                type: string
+                format: uri
+              agentSignatureUrl:
+                type: string
+                format: uri
+              verificationNotes:
+                type: string
+                maxLength: 500
+              seedType:
+                type: string
+                maxLength: 120
+              fertilizerUsed:
+                type: string
+                maxLength: 120
+              herbicideUsed:
+                type: boolean
+              postHarvestStorage:
+                type: string
+                maxLength: 120
+              estimatedFarmIncome:
+                type: number
+                minimum: 0
+              notes:
+                type: string
+                maxLength: 500
+              farmerId:
+                type: string
+                format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+  delete:
+    tags:
+      - Agent — Production
+    summary: Remove
+    parameters:
+      - name: productionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/agent/market-access:
+  post:
+    tags:
+      - Agent — Market Access
+    summary: Create
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              farmerId:
+                type: string
+                format: uuid
+              seasonYear:
+                type: integer
+                minimum: 2000
+                maximum: 2100
+              buyerName:
+                type: string
+                maxLength: 150
+              pricePerTon:
+                type: number
+                minimum: 0
+              priceContext:
+                type: string
+                enum:
+                  - distress
+                  - market
+                  - confirmed
+                  - pre_agreed
+              isConfirmed:
+                type: boolean
+                default: false
+              harvestWindow:
+                type: string
+                maxLength: 120
+              notes:
+                type: string
+                maxLength: 500
+            required:
+              - farmerId
+              - buyerName
+    responses:
+      "201":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/agent/market-access/{recordId}:
+  patch:
+    tags:
+      - Agent — Market Access
+    summary: Update
+    parameters:
+      - name: recordId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              farmerId:
+                type: string
+                format: uuid
+              seasonYear:
+                type: integer
+                minimum: 2000
+                maximum: 2100
+              buyerName:
+                type: string
+                maxLength: 150
+              pricePerTon:
+                type: number
+                minimum: 0
+              priceContext:
+                type: string
+                enum:
+                  - distress
+                  - market
+                  - confirmed
+                  - pre_agreed
+              isConfirmed:
+                type: boolean
+                default: false
+              harvestWindow:
+                type: string
+                maxLength: 120
+              notes:
+                type: string
+                maxLength: 500
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+  delete:
+    tags:
+      - Agent — Market Access
+    summary: Remove
+    parameters:
+      - name: recordId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/agent/field-notes:
+  post:
+    tags:
+      - Agent — Field Notes
+    summary: Create
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              farmerId:
+                type: string
+                format: uuid
+              cooperativeId:
+                type: string
+                format: uuid
+              noteType:
+                type: string
+                enum:
+                  - assessment
+                  - disbursement
+                  - repayment
+                  - registration
+                  - visit
+                  - general
+                default: general
+              title:
+                type: string
+                maxLength: 160
+              body:
+                type: string
+                maxLength: 2000
+              tagLabel:
+                type: string
+                maxLength: 60
+              tagVariant:
+                type: string
+                enum:
+                  - green
+                  - amber
+                  - neutral
+                default: green
+              eventDate:
+                type: string
+                format: date-time
+            required:
+              - farmerId
+              - body
+    responses:
+      "201":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/agent/field-notes/{noteId}:
+  patch:
+    tags:
+      - Agent — Field Notes
+    summary: Update
+    parameters:
+      - name: noteId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              noteType:
+                type: string
+                enum:
+                  - assessment
+                  - disbursement
+                  - repayment
+                  - registration
+                  - visit
+                  - general
+              title:
+                type: string
+                maxLength: 160
+                enum:
+                  - ""
+              body:
+                type: string
+                maxLength: 2000
+              tagLabel:
+                type: string
+                maxLength: 60
+                enum:
+                  - ""
+              tagVariant:
+                type: string
+                enum:
+                  - green
+                  - amber
+                  - neutral
+              eventDate:
+                type: string
+                format: date-time
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+  delete:
+    tags:
+      - Agent — Field Notes
+    summary: Remove
+    parameters:
+      - name: noteId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/agent/change-requests:
+  get:
+    tags:
+      - Agent — Change Requests
+    summary: List
+    parameters:
+      - $ref: "#/components/parameters/PageParam"
+      - $ref: "#/components/parameters/PageSizeParam"
+      - name: search
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: farmerId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: cooperativeId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: agentId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: actorId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: state
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: lga
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: crop
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: season
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: tier
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - A
+            - B
+            - C
+            - D
+      - name: startDate
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: endDate
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: action
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 80
+      - name: entityType
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: source
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: transactionType
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 40
+      - name: unread
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - "true"
+            - "false"
+      - name: q
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: type
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - all
+            - farmer
+            - cooperative
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaginatedEnvelope"
+  post:
+    tags:
+      - Agent — Change Requests
+    summary: Create
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              entityType:
+                type: string
+                enum:
+                  - farmer
+                  - cooperative
+                  - farm_profile
+              entityId:
+                type: string
+                format: uuid
+              changeType:
+                type: string
+                enum:
+                  - update
+                  - delete
+                default: update
+              proposedChanges:
+                type: object
+            required:
+              - entityType
+              - entityId
+              - proposedChanges
+    responses:
+      "201":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/agent/change-requests/{changeRequestId}:
+  get:
+    tags:
+      - Agent — Change Requests
+    summary: Get by id
+    parameters:
+      - name: changeRequestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/admin/profile:
+  patch:
+    tags:
+      - Admin — Profile
+    summary: Update profile
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              fullName:
+                type: string
+                minLength: 2
+                maxLength: 120
+              phone:
+                type: string
+                pattern: ^\+?[0-9]{7,15}$
+              state:
+                type: string
+              lga:
+                type: string
+              avatarUrl:
+                type: string
+                format: uri
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/admin/farmers/{farmerId}/seasonal-yield:
+  get:
+    tags:
+      - Admin — Farmers
+    summary: Farmer seasonal yield
+    parameters:
+      - name: farmerId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/admin/farmers/{farmerId}/market-access:
+  get:
+    tags:
+      - Admin — Farmers
+    summary: List by farmer
+    parameters:
+      - name: farmerId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaginatedEnvelope"
+/admin/farmers/{farmerId}/field-notes:
+  get:
+    tags:
+      - Admin — Farmers
+    summary: List by farmer
+    parameters:
+      - name: farmerId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaginatedEnvelope"
+/admin/farmers/{farmerId}/map-farm:
+  post:
+    tags:
+      - Admin — Farmers
+    summary: Map farm
+    parameters:
+      - name: farmerId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              gpsPolygon:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    lat:
+                      type: number
+                      minimum: -90
+                      maximum: 90
+                    lng:
+                      type: number
+                      minimum: -180
+                      maximum: 180
+                  required:
+                    - lat
+                    - lng
+                minItems: 3
+              overrideSizeAcres:
+                type: number
+                minimum: 0
+            required:
+              - gpsPolygon
+    responses:
+      "201":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/admin/productions:
+  get:
+    tags:
+      - Admin — Production
+    summary: List
+    parameters:
+      - $ref: "#/components/parameters/PageParam"
+      - $ref: "#/components/parameters/PageSizeParam"
+      - name: search
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: farmerId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: cooperativeId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: agentId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: actorId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: state
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: lga
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: crop
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: season
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: tier
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - A
+            - B
+            - C
+            - D
+      - name: startDate
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: endDate
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: action
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 80
+      - name: entityType
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: source
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: transactionType
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 40
+      - name: unread
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - "true"
+            - "false"
+      - name: q
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: type
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - all
+            - farmer
+            - cooperative
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaginatedEnvelope"
+/admin/productions/{productionId}:
+  get:
+    tags:
+      - Admin — Production
+    summary: Get by id
+    parameters:
+      - name: productionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+  patch:
+    tags:
+      - Admin — Production
+    summary: Update
+    parameters:
+      - name: productionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              cycleNumber:
+                type: integer
+                minimum: 1
+                default: 1
+              season:
+                type: string
+              crop:
+                type: string
+              farmSizeAcres:
+                type: number
+                minimum: 0
+              expectedPlantingDate:
+                type: string
+                format: date-time
+              expectedHarvestDate:
+                type: string
+                format: date-time
+              expectedYieldTonnes:
+                type: number
+                minimum: 0
+              actualYieldTonnes:
+                type: number
+                minimum: 0
+              benchmarkYieldTonnes:
+                type: number
+                minimum: 0
+              harvestDate:
+                type: string
+                format: date-time
+              harvestPhotoUrls:
+                type: array
+                items:
+                  type: string
+                  format: uri
+              warehouseReceiptUrl:
+                type: string
+                format: uri
+              buyerReceiptUrl:
+                type: string
+                format: uri
+              agentSignatureUrl:
+                type: string
+                format: uri
+              verificationNotes:
+                type: string
+                maxLength: 500
+              seedType:
+                type: string
+                maxLength: 120
+              fertilizerUsed:
+                type: string
+                maxLength: 120
+              herbicideUsed:
+                type: boolean
+              postHarvestStorage:
+                type: string
+                maxLength: 120
+              estimatedFarmIncome:
+                type: number
+                minimum: 0
+              notes:
+                type: string
+                maxLength: 500
+              farmerId:
+                type: string
+                format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/admin/productions/{productionId}/verify:
+  post:
+    tags:
+      - Admin — Production
+    summary: Verify
+    parameters:
+      - name: productionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              decision:
+                type: string
+                enum:
+                  - verify
+                  - reject
+              verificationNotes:
+                type: string
+                maxLength: 500
+            required:
+              - decision
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/admin/cooperatives/{cooperativeId}/yield-volume:
+  get:
+    tags:
+      - Admin — Cooperatives
+    summary: Cooperative yield volume
+    parameters:
+      - name: cooperativeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/admin/change-requests:
+  get:
+    tags:
+      - Admin — Change Requests
+    summary: List
+    parameters:
+      - $ref: "#/components/parameters/PageParam"
+      - $ref: "#/components/parameters/PageSizeParam"
+      - name: search
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: farmerId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: cooperativeId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: agentId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: actorId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: state
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: lga
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: crop
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: season
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: tier
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - A
+            - B
+            - C
+            - D
+      - name: startDate
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: endDate
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: action
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 80
+      - name: entityType
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: source
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: transactionType
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 40
+      - name: unread
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - "true"
+            - "false"
+      - name: q
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: type
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - all
+            - farmer
+            - cooperative
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaginatedEnvelope"
+/admin/change-requests/{changeRequestId}:
+  get:
+    tags:
+      - Admin — Change Requests
+    summary: Get by id
+    parameters:
+      - name: changeRequestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/admin/change-requests/{changeRequestId}/decision:
+  post:
+    tags:
+      - Admin — Change Requests
+    summary: Decide
+    parameters:
+      - name: changeRequestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              decision:
+                type: string
+                enum:
+                  - approve
+                  - reject
+              reviewNotes:
+                type: string
+                maxLength: 500
+            required:
+              - decision
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/admin/deliveries:
+  get:
+    tags:
+      - Admin — Deliveries
+    summary: List
+    parameters:
+      - $ref: "#/components/parameters/PageParam"
+      - $ref: "#/components/parameters/PageSizeParam"
+      - name: search
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: farmerId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: cooperativeId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: agentId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: actorId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: state
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: lga
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: crop
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: season
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: tier
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - A
+            - B
+            - C
+            - D
+      - name: startDate
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: endDate
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: action
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 80
+      - name: entityType
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: source
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: transactionType
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 40
+      - name: unread
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - "true"
+            - "false"
+      - name: q
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: type
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - all
+            - farmer
+            - cooperative
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaginatedEnvelope"
+/admin/repayments:
+  get:
+    tags:
+      - Admin — Repayments
+    summary: List
+    parameters:
+      - $ref: "#/components/parameters/PageParam"
+      - $ref: "#/components/parameters/PageSizeParam"
+      - name: search
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: farmerId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: cooperativeId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: agentId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: actorId
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: state
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: lga
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: crop
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: season
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: tier
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - A
+            - B
+            - C
+            - D
+      - name: startDate
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: endDate
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: action
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 80
+      - name: entityType
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: source
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 60
+      - name: transactionType
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 40
+      - name: unread
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - "true"
+            - "false"
+      - name: q
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 120
+      - name: type
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - all
+            - farmer
+            - cooperative
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaginatedEnvelope"
+/admin/notifications:
+  get:
+    tags:
+      - Admin — Notifications
+    summary: List
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaginatedEnvelope"
+/admin/notifications/unread-count:
+  get:
+    tags:
+      - Admin — Notifications
+    summary: Unread count
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/admin/notifications/{notificationId}/read:
+  patch:
+    tags:
+      - Admin — Notifications
+    summary: Mark read
+    parameters:
+      - name: notificationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/admin/notifications/read-all:
+  patch:
+    tags:
+      - Admin — Notifications
+    summary: Mark all read
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/admin/uploads/{kind}:
+  post:
+    tags:
+      - Admin — Uploads
+    summary: Upload generic
+    parameters:
+      - name: kind
+        in: path
+        required: true
+        description: Storage bucket to upload into.
+        schema:
+          type: string
+          enum:
+            - agent_signature
+            - avatar
+            - buyer_receipt
+            - cooperative_logo
+            - delivery_proof
+            - farm_photo
+            - farmer_id
+            - farmer_photo
+            - harvest_photo
+            - land_doc
+            - partner_logo
+            - selfie
+            - transaction_receipt
+            - warehouse_receipt
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required:
+              - file
+            properties:
+              file:
+                type: string
+                format: binary
+    responses:
+      "201":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/partner/profile:
+  patch:
+    tags:
+      - Partner — Profile
+    summary: Update profile
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              fullName:
+                type: string
+                minLength: 2
+                maxLength: 120
+              phone:
+                type: string
+                pattern: ^\+?[0-9]{7,15}$
+              state:
+                type: string
+              lga:
+                type: string
+              avatarUrl:
+                type: string
+                format: uri
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+  delete:
+    tags:
+      - Partner — Profile
+    summary: Delete account
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/partner/uploads/{kind}:
+  post:
+    tags:
+      - Partner — Uploads
+    summary: Upload generic
+    parameters:
+      - name: kind
+        in: path
+        required: true
+        description: Storage bucket to upload into.
+        schema:
+          type: string
+          enum:
+            - agent_signature
+            - avatar
+            - buyer_receipt
+            - cooperative_logo
+            - delivery_proof
+            - farm_photo
+            - farmer_id
+            - farmer_photo
+            - harvest_photo
+            - land_doc
+            - partner_logo
+            - selfie
+            - transaction_receipt
+            - warehouse_receipt
+    requestBody:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required:
+              - file
+            properties:
+              file:
+                type: string
+                format: binary
+    responses:
+      "201":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/partner/field-agents:
+  get:
+    tags:
+      - Partner — Field Agents
+    summary: Field agents
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/partner/cooperatives:
+  get:
+    tags:
+      - Partner — Cooperatives
+    summary: Browse cooperatives
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/partner/cooperatives/{cooperativeId}/farmers:
+  get:
+    tags:
+      - Partner — Cooperatives
+    summary: Browse cooperative farmers
+    parameters:
+      - name: cooperativeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/partner/farmers:
+  get:
+    tags:
+      - Partner — Farmers
+    summary: Browse farmers
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/partner/farmers/{farmerId}/seasonal-yield:
+  get:
+    tags:
+      - Partner — Farmers
+    summary: Farmer seasonal yield
+    parameters:
+      - name: farmerId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/partner/farmers/{farmerId}/market-access:
+  get:
+    tags:
+      - Partner — Farmers
+    summary: List by farmer
+    parameters:
+      - name: farmerId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaginatedEnvelope"
+/partner/farmers/{farmerId}/field-notes:
+  get:
+    tags:
+      - Partner — Farmers
+    summary: List by farmer
+    parameters:
+      - name: farmerId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaginatedEnvelope"
+/partner/notifications:
+  get:
+    tags:
+      - Partner — Notifications
+    summary: List
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaginatedEnvelope"
+/partner/notifications/unread-count:
+  get:
+    tags:
+      - Partner — Notifications
+    summary: Unread count
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/partner/notifications/{notificationId}/read:
+  patch:
+    tags:
+      - Partner — Notifications
+    summary: Mark read
+    parameters:
+      - name: notificationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"
+/partner/notifications/read-all:
+  patch:
+    tags:
+      - Partner — Notifications
+    summary: Mark all read
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuccessEnvelope"

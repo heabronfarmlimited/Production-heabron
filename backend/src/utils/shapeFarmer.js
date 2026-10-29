@@ -107,4 +107,65 @@ function shapeFarmers(rows) {
   return rows.map(shapeFarmer);
 }
 
-module.exports = { shapeFarmer, shapeFarmers, shapeFarm };
+/**
+ * Mask the identity columns before a farmer row is handed to a LENDER.
+ *
+ * FIXED — `partner.controller.js` says, in a comment above the browse
+ * endpoints: "Identity columns (NIN/BVN/phone) are returned the same masked
+ * way the report screens already handle." Nothing was masked anywhere. All
+ * three partner browse endpoints did `select('*')` on `farmers`, so every
+ * lender with a login could page through the whole population and read, for
+ * each farmer:
+ *
+ *   nin, bvn                   — national identity + bank verification numbers
+ *   nin_verification_payload   — the stored provider response, which carries
+ *                                the resident's photograph and home address
+ *   id_image_url               — a signed URL to a photo of their ID document
+ *   phone, alt_phone, address, date_of_birth
+ *
+ * A lender needs to know identity is *verified*, not what the identity is.
+ * Keys are preserved (the dashboards read them) and only the values are
+ * redacted, so the response shape does not change.
+ */
+const KEEP_LAST = 3;
+
+function maskDigits(value) {
+  const s = String(value ?? '');
+  if (!s) return null;
+  if (s.length <= KEEP_LAST) return '•'.repeat(s.length);
+  return '•'.repeat(s.length - KEEP_LAST) + s.slice(-KEEP_LAST);
+}
+
+function maskFarmerIdentity(row) {
+  if (!row) return row;
+  const out = { ...row };
+  if ('nin' in out) out.nin = out.nin ? maskDigits(out.nin) : null;
+  if ('bvn' in out) out.bvn = out.bvn ? maskDigits(out.bvn) : null;
+  if ('phone' in out) out.phone = out.phone ? maskDigits(out.phone) : null;
+  if ('alt_phone' in out) out.alt_phone = out.alt_phone ? maskDigits(out.alt_phone) : null;
+  // Not maskable in a useful way — withheld entirely.
+  if ('nin_verification_payload' in out) out.nin_verification_payload = null;
+  if ('id_image_url' in out) out.id_image_url = null;
+  if ('address' in out) out.address = null;
+  if ('date_of_birth' in out) out.date_of_birth = null;
+  return out;
+}
+
+/** Shape + mask, for partner-facing farmer lists. */
+function shapeFarmerForPartner(row) {
+  return maskFarmerIdentity(shapeFarmer(row));
+}
+
+function shapeFarmersForPartner(rows) {
+  if (!Array.isArray(rows)) return rows;
+  return rows.map(shapeFarmerForPartner);
+}
+
+module.exports = {
+  shapeFarmer,
+  shapeFarmers,
+  shapeFarm,
+  maskFarmerIdentity,
+  shapeFarmerForPartner,
+  shapeFarmersForPartner,
+};

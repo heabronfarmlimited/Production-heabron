@@ -28,8 +28,10 @@ router.post('/change-password', requireAuth({ requireActive: false }), validate(
 router.get('/me', requireAuth({ requireActive: false }), asyncHandler(ctrl.me));
 
 // Uploads that must work BEFORE admin approval — avatar + selfie only.
-// Authenticated, but does not require an active status. Other upload kinds
-// remain gated behind /agent/uploads (active field agent).
+// UNAUTHENTICATED by design (see the note on the route below); the earlier
+// comment here claimed otherwise, but there is no requireAuth() in the chain
+// and uploadPreActivation never reads req.user. Other upload kinds remain
+// gated behind /agent/uploads (active field agent).
 router.post(
   '/uploads/:kind',
   // Pre-activation upload (used during field-agent onboarding, before the

@@ -7,7 +7,9 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Card, TierPill, EmptyState } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { DataTable, Pagination } from '@/components/ui/DataTable';
-import { formatNumber, formatDate } from '@/lib/utils';
+import { formatNumber, formatDate, formatScore } from '@/lib/utils';
+
+const PAGE_SIZE = 20;
 
 export default function CooperativesPage() {
   const navigate = useNavigate();
@@ -15,9 +17,10 @@ export default function CooperativesPage() {
   const [state, setState] = useState('');
   const [page, setPage] = useState(1);
 
-  const { data, isLoading } = useQuery({
+  // FIXED — bypassed apiClient via api.raw because `call()` dropped `meta`.
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['admin-cooperatives', { search, state, page }],
-    queryFn: () => api.raw.get('/admin/cooperatives', { params: { search, state, page, pageSize: 20 } }).then((r) => r.data),
+    queryFn: () => api.list('/admin/cooperatives', { params: { search, state, page, pageSize: PAGE_SIZE } }),
   });
 
   const columns = [
@@ -37,24 +40,36 @@ export default function CooperativesPage() {
     {
       key: 'crops',
       label: 'Crops',
-      render: (r) => (
-        <div className="flex flex-wrap gap-1">
-          {(r.crops_supported || []).slice(0, 3).map((c) => (
-            <span key={c} className="pill-neutral text-[10px]">{c}</span>
-          ))}
-        </div>
-      ),
+      render: (r) => {
+        const crops = Array.isArray(r.crops_supported) ? r.crops_supported.filter(Boolean) : [];
+        if (crops.length === 0) return <span className="text-smoke">—</span>;
+        return (
+          <div className="flex flex-wrap gap-1">
+            {crops.slice(0, 3).map((c) => (
+              <span key={c} className="pill-neutral text-[10px] capitalize">{c}</span>
+            ))}
+            {crops.length > 3 && <span className="text-[10px] text-smoke">+{crops.length - 3}</span>}
+          </div>
+        );
+      },
     },
     {
       key: 'score',
       label: 'Avg Score',
       align: 'right',
       render: (r) => {
-        const s = r.cooperative_credit_scores?.[0]?.average_score ?? r.average_credit_score;
-        const tier = r.cooperative_credit_scores?.[0]?.cooperative_tier ?? r.cooperative_tier;
+        // FIXED — the embedded score comes back as an object or a 1-element
+        // array depending on how PostgREST infers the relationship, so the
+        // hard-coded `[0]` read undefined half the time. `Number(null)
+        // .toFixed(1)` also printed "NaN" for unscored cooperatives.
+        const cs = Array.isArray(r.cooperative_credit_scores)
+          ? r.cooperative_credit_scores[0]
+          : r.cooperative_credit_scores;
+        const s = cs?.average_score ?? r.average_credit_score;
+        const tier = cs?.cooperative_tier ?? r.cooperative_tier;
         return (
           <div className="flex items-center justify-end gap-2">
-            <span className="tabular font-display text-lg font-semibold">{s != null ? Number(s).toFixed(1) : '—'}</span>
+            <span className="tabular font-display text-lg font-semibold">{formatScore(s)}</span>
             <TierPill tier={tier} />
           </div>
         );
@@ -75,20 +90,47 @@ export default function CooperativesPage() {
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-smoke" />
-            <Input placeholder="Search by name…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="pl-10" />
+            <Input
+              placeholder="Search by name…"
+              aria-label="Search cooperatives by name"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              className="pl-10"
+            />
           </div>
-          <Input placeholder="Filter by state" value={state} onChange={(e) => { setState(e.target.value); setPage(1); }} className="max-w-[200px]" />
+          <Input
+            placeholder="Filter by state"
+            aria-label="Filter cooperatives by state"
+            value={state}
+            onChange={(e) => { setState(e.target.value); setPage(1); }}
+            className="max-w-[200px]"
+          />
         </div>
       </Card>
+
+      {/* FIXED — no error state: a failed request rendered as "no cooperatives". */}
+      {isError && (
+        <Card padded className="mb-4 border-red-200 bg-red-50/60">
+          <p className="text-sm text-red-700">
+            Could not load cooperatives{error?.message ? `: ${error.message}` : ''}.
+          </p>
+        </Card>
+      )}
 
       <DataTable
         loading={isLoading}
         columns={columns}
-        rows={data?.data || []}
+        rows={data?.data}
         onRowClick={(r) => navigate(`/admin/credit/cooperatives/${r.id}`)}
-        empty={<EmptyState icon={Users} title="No cooperatives yet" />}
+        empty={
+          <EmptyState
+            icon={Users}
+            title={search || state ? 'No cooperatives match these filters' : 'No cooperatives yet'}
+            description={search || state ? 'Clear the search or state filter to see them all.' : 'Cooperatives appear here once field agents register them.'}
+          />
+        }
       />
-      <Pagination page={page} pageSize={20} total={data?.meta?.total || 0} onPageChange={setPage} />
+      <Pagination page={page} pageSize={data?.meta?.pageSize || PAGE_SIZE} total={data?.meta?.total || 0} onPageChange={setPage} />
     </>
   );
 }

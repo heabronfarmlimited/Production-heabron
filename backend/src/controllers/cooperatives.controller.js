@@ -1,12 +1,14 @@
 'use strict';
 
 const { supabaseAdmin } = require('../config/supabase');
-const { ok, created, notFound, forbidden, paginated } = require('../utils/response');
+const { ok, created, notFound, forbidden, paginated, badRequest, conflict, serverError } = require('../utils/response');
 const { parsePagination } = require('../utils/pagination');
 const { logActivity } = require('../utils/activity');
 const { ADMIN_ROLES } = require('../middleware/auth');
 const { shapeFarmers } = require('../utils/shapeFarmer');
+const { assertCooperativeAccess } = require('../utils/ownership');
 const logger = require('../utils/logger');
+const { containsPattern } = require('../utils/search');
 
 function toRow(input, userId) {
   return {
@@ -42,7 +44,7 @@ async function list(req, res) {
   } else if (ADMIN_ROLES.includes(req.user.role) && agentId) {
     q = q.eq('created_by_agent_id', agentId);
   }
-  if (search) q = q.ilike('name', `%${search}%`);
+  if (search) q = q.ilike('name', containsPattern(search));
   if (state) q = q.eq('state', state);
   if (lga) q = q.eq('lga', lga);
   if (crop) q = q.contains('crops_supported', [crop]);
@@ -77,11 +79,17 @@ async function getById(req, res) {
     return forbidden(res, 'You did not create this cooperative');
   }
 
-  const [{ count: farmersCount }, { count: deliveriesCount }, { count: financingCount }] = await Promise.all([
+  // FIXED — all three count queries discarded their error, so a failure read
+  // as `count: null` and rendered as a confident "0 farmers, 0 deliveries,
+  // 0 financing requests" on the cooperative detail screen.
+  const [farmersRes, deliveriesRes, financingRes] = await Promise.all([
     sb.from('farmers').select('id', { count: 'exact', head: true }).eq('cooperative_id', data.id),
     sb.from('produce_deliveries').select('id', { count: 'exact', head: true }).eq('cooperative_id', data.id),
     sb.from('financing_requests').select('id', { count: 'exact', head: true }).eq('cooperative_id', data.id),
   ]);
+  for (const r of [farmersRes, deliveriesRes, financingRes]) {
+    if (r.error) throw r.error;
+  }
 
   // Defensive tier fill-in for legacy rows that pre-date the seed-on-create
   // patch — never render "null" to the mobile client.
@@ -92,9 +100,9 @@ async function getById(req, res) {
     cooperative_tier: effectiveTier,
     average_credit_score: data.average_credit_score ?? 0,
     stats: {
-      farmers: farmersCount || 0,
-      deliveries: deliveriesCount || 0,
-      financingRequests: financingCount || 0,
+      farmers: farmersRes.count || 0,
+      deliveries: deliveriesRes.count || 0,
+      financingRequests: financingRes.count || 0,
     },
   });
 }
@@ -115,8 +123,12 @@ async function create(req, res) {
     .single();
   if (error) throw error;
 
-  try {
-    await sb.from('cooperative_credit_scores').upsert(
+  // FIXED — wrapped in try/catch, but supabase-js resolves with `{ error }`
+  // rather than throwing, so the catch was unreachable and a failed seed was
+  // invisible. Without this row the cooperative has no credit-score record at
+  // all, which the partner directory renders as a blank tier.
+  {
+    const { error: seedErr } = await sb.from('cooperative_credit_scores').upsert(
       {
         cooperative_id: data.id,
         average_score: 0,
@@ -131,19 +143,22 @@ async function create(req, res) {
       },
       { onConflict: 'cooperative_id' }
     );
-  } catch (e) {
-    logger.warn({ err: e.message, cooperativeId: data.id }, 'cooperative_credit_scores seed failed');
+    if (seedErr) {
+      logger.warn(
+        { err: seedErr.message, code: seedErr.code, cooperativeId: data.id },
+        'cooperative_credit_scores seed failed'
+      );
+    }
   }
 
-  try {
-    await sb.from('notifications').insert({
-      user_id: req.user.userId,
-      type: 'cooperative_added',
-      title: 'Cooperative created',
-      message: `You added "${data.name}"`,
-      metadata: { cooperativeId: data.id },
-    });
-  } catch (e) { logger.warn({ err: e.message }, 'cooperative notification failed'); }
+  const { error: notifyErr } = await sb.from('notifications').insert({
+    user_id: req.user.userId,
+    type: 'cooperative_added',
+    title: 'Cooperative created',
+    message: `You added "${data.name}"`,
+    metadata: { cooperativeId: data.id },
+  });
+  if (notifyErr) logger.warn({ err: notifyErr.message, code: notifyErr.code }, 'cooperative notification failed');
 
   await logActivity({ actor: req.user, action: 'cooperative_created', entityType: 'cooperative', entityId: data.id, metadata: { name: data.name }, req });
   return created(res, data);
@@ -151,15 +166,24 @@ async function create(req, res) {
 
 async function update(req, res) {
   const sb = supabaseAdmin();
-  const { data: existing } = await sb.from('cooperatives').select('id, created_by_agent_id').eq('id', req.params.cooperativeId).maybeSingle();
-  if (!existing) return notFound(res);
-  if (req.user.role === 'field_agent' && existing.created_by_agent_id !== req.user.userId) return forbidden(res);
+  const access = await assertCooperativeAccess(sb, req.params.cooperativeId, req.user);
+  if (access.error === 'not_found') return notFound(res, 'Cooperative not found');
+  if (access.error === 'forbidden') return forbidden(res);
+  if (access.error) return serverError(res, 'Could not verify access to that cooperative');
+  const existing = access.cooperative;
 
   const patch = toRow(req.body, existing.created_by_agent_id);
   delete patch.created_by_agent_id;
   Object.keys(patch).forEach((k) => patch[k] === undefined && delete patch[k]);
 
-  const { data, error } = await sb.from('cooperatives').update(patch).eq('id', req.params.cooperativeId).select().single();
+  // FIXED — an empty patch reached PostgREST as `update({})`, which errors,
+  // and `.single()` turned that into a generic 500. (The Joi layer was also
+  // injecting creation defaults here, so "empty" PATCHes were in fact wiping
+  // `crops_supported` — see validators/domain.js.)
+  if (Object.keys(patch).length === 0) return badRequest(res, 'No fields to update');
+  patch.updated_at = new Date().toISOString();
+
+  const { data, error } = await sb.from('cooperatives').update(patch).eq('id', existing.id).select().single();
   if (error) throw error;
   await logActivity({ actor: req.user, action: 'cooperative_updated', entityType: 'cooperative', entityId: data.id, req });
   return ok(res, data);
@@ -167,11 +191,37 @@ async function update(req, res) {
 
 async function remove(req, res) {
   const sb = supabaseAdmin();
-  const { data: existing } = await sb.from('cooperatives').select('id, created_by_agent_id, name').eq('id', req.params.cooperativeId).maybeSingle();
-  if (!existing) return notFound(res);
-  if (req.user.role === 'field_agent' && existing.created_by_agent_id !== req.user.userId) return forbidden(res);
+  const access = await assertCooperativeAccess(sb, req.params.cooperativeId, req.user);
+  if (access.error === 'not_found') return notFound(res, 'Cooperative not found');
+  if (access.error === 'forbidden') return forbidden(res);
+  if (access.error) return serverError(res, 'Could not verify access to that cooperative');
+  const existing = access.cooperative;
 
-  await sb.from('cooperatives').delete().eq('id', req.params.cooperativeId);
+  // FIXED — the delete discarded its error AND the schema cascades:
+  // `financing_requests.cooperative_id` is ON DELETE CASCADE, so deleting a
+  // cooperative destroyed every loan raised against it (and, through
+  // `repayment_records`' own cascade, the entire repayment history behind
+  // them). `farmers.cooperative_id` is ON DELETE SET NULL, so the members
+  // were silently orphaned out of every cooperative rollup. The endpoint
+  // answered `{ deleted: true }` either way.
+  const [{ count: memberCount, error: memberErr }, { count: loanCount, error: loanErr }] = await Promise.all([
+    sb.from('farmers').select('id', { count: 'exact', head: true }).eq('cooperative_id', existing.id),
+    sb.from('financing_requests').select('id', { count: 'exact', head: true }).eq('cooperative_id', existing.id),
+  ]);
+  if (memberErr) throw memberErr;
+  if (loanErr) throw loanErr;
+
+  if ((memberCount || 0) > 0 || (loanCount || 0) > 0) {
+    return conflict(
+      res,
+      'This cooperative still has members or financing records and cannot be deleted. Move or remove the farmers first.',
+      { cooperativeId: existing.id, members: memberCount || 0, financingRequests: loanCount || 0 }
+    );
+  }
+
+  const { error: delErr } = await sb.from('cooperatives').delete().eq('id', existing.id);
+  if (delErr) throw delErr;
+
   await logActivity({ actor: req.user, action: 'cooperative_deleted', entityType: 'cooperative', entityId: existing.id, metadata: { name: existing.name }, req });
   return ok(res, { deleted: true });
 }
@@ -179,6 +229,21 @@ async function remove(req, res) {
 async function listFarmers(req, res) {
   const sb = supabaseAdmin();
   const { page, pageSize, from, to } = parsePagination(req.query);
+
+  // FIXED — AUTHORISATION HOLE. Mounted at
+  // GET /api/agent/cooperatives/:cooperativeId/farmers behind
+  // `requireFieldAgent`, this handler never checked who owns the cooperative.
+  // Any active field agent could enumerate ANY other agent's entire farmer
+  // roster by cooperative id, and because the select is `*` the response
+  // carried each farmer's NIN, BVN, phone, address, date of birth and the
+  // stored `nin_verification_payload` from the identity provider.
+  // `cooperatives.getById` two functions above does check — this one was the
+  // unguarded way to the same data.
+  const access = await assertCooperativeAccess(sb, req.params.cooperativeId, req.user);
+  if (access.error === 'not_found') return notFound(res, 'Cooperative not found');
+  if (access.error === 'forbidden') return forbidden(res, 'You did not create this cooperative');
+  if (access.error) return serverError(res, 'Could not verify access to that cooperative');
+
   const { count, data, error } = await sb
     .from('farmers')
     .select(

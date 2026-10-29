@@ -49,14 +49,14 @@ function assertServiceRoleKey() {
       '("new row violates row-level security policy"). Use the SECRET key ' +
       '(sb_secret_...) or the legacy service_role JWT from ' +
       'Supabase Dashboard → Project Settings → API.';
-    // eslint-disable-next-line no-console
+     
     console.error(msg);
     throw new Error(msg);
   }
 
   const payload = decodeJwtPayload(key);
   if (!payload) {
-    // eslint-disable-next-line no-console
+     
     console.warn('[supabase] SUPABASE_SERVICE_ROLE_KEY is not a decodable JWT — skipping role check');
     return;
   }
@@ -64,7 +64,7 @@ function assertServiceRoleKey() {
     const msg = `[supabase] SUPABASE_SERVICE_ROLE_KEY has role="${payload.role}" but must be "service_role". ` +
       `RLS will block writes (otp_codes, storage uploads, etc.). Copy the SERVICE ROLE key from ` +
       `Supabase Dashboard → Project Settings → API → "service_role" (not "anon").`;
-    // eslint-disable-next-line no-console
+     
     console.error(msg);
     throw new Error(msg);
   }

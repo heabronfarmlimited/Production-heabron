@@ -1,27 +1,30 @@
 'use strict';
 
 const { supabaseAdmin } = require('../config/supabase');
-const { ok, created, notFound, forbidden, noContent } = require('../utils/response');
+const { ok, created, notFound, forbidden, noContent, badRequest, serverError } = require('../utils/response');
 const { logActivity } = require('../utils/activity');
+// FIXED — this file carried its own `assertFarmer`, one of three near-identical
+// copies (productions, fieldNotes) that had drifted apart. Shared now.
+const { assertFarmerAccess } = require('../utils/ownership');
 
-async function assertFarmer(sb, farmerId, user) {
-  const { data: farmer } = await sb.from('farmers').select('id, created_by_agent_id').eq('id', farmerId).maybeSingle();
-  if (!farmer) return { error: 'not_found' };
-  if (user.role === 'field_agent' && farmer.created_by_agent_id !== user.userId) return { error: 'forbidden' };
-  return { farmer };
+/** Map an ownership-check failure onto a response. */
+function denyFor(res, code) {
+  if (code === 'not_found') return notFound(res, 'Farmer not found');
+  if (code === 'forbidden') return forbidden(res);
+  return serverError(res, 'Could not verify access to that farmer');
 }
 
 // GET /farmers/:farmerId/market-access  (offtake history)
 async function listByFarmer(req, res) {
   const sb = supabaseAdmin();
-  const acc = await assertFarmer(sb, req.params.farmerId, req.user);
-  if (acc.error === 'not_found') return notFound(res, 'Farmer not found');
-  if (acc.error === 'forbidden') return forbidden(res);
+  const acc = await assertFarmerAccess(sb, req.params.farmerId, req.user);
+  if (acc.error) return denyFor(res, acc.error);
   const { data, error } = await sb
     .from('market_access_records')
     .select('*')
     .eq('farmer_id', req.params.farmerId)
-    .order('season_year', { ascending: true, nullsFirst: true });
+    .order('season_year', { ascending: true, nullsFirst: true })
+    .limit(500);
   if (error) throw error;
   return ok(res, data || []);
 }
@@ -30,9 +33,8 @@ async function listByFarmer(req, res) {
 async function create(req, res) {
   const sb = supabaseAdmin();
   const b = req.body;
-  const acc = await assertFarmer(sb, b.farmerId, req.user);
-  if (acc.error === 'not_found') return notFound(res, 'Farmer not found');
-  if (acc.error === 'forbidden') return forbidden(res);
+  const acc = await assertFarmerAccess(sb, b.farmerId, req.user);
+  if (acc.error) return denyFor(res, acc.error);
   const { data, error } = await sb.from('market_access_records').insert({
     farmer_id: b.farmerId,
     season_year: b.seasonYear ?? null,
@@ -52,12 +54,13 @@ async function create(req, res) {
 // PATCH /market-access/:recordId
 async function update(req, res) {
   const sb = supabaseAdmin();
-  const { data: existing } = await sb
+  const { data: existing, error: readErr } = await sb
     .from('market_access_records')
     .select('*, farmers(created_by_agent_id)')
     .eq('id', req.params.recordId)
     .maybeSingle();
-  if (!existing) return notFound(res);
+  if (readErr) throw readErr;
+  if (!existing) return notFound(res, 'Market access record not found');
   if (req.user.role === 'field_agent' && existing.farmers?.created_by_agent_id !== req.user.userId) return forbidden(res);
   const b = req.body;
   const patch = {};
@@ -68,6 +71,9 @@ async function update(req, res) {
   if (b.isConfirmed !== undefined) patch.is_confirmed = b.isConfirmed;
   if (b.harvestWindow !== undefined) patch.harvest_window = b.harvestWindow;
   if (b.notes !== undefined) patch.notes = b.notes;
+  // FIXED — an empty body produced a patch of only `updated_at`, which
+  // "succeeded" while changing nothing the caller asked for.
+  if (Object.keys(patch).length === 0) return badRequest(res, 'No fields to update');
   patch.updated_at = new Date().toISOString();
   const { data, error } = await sb.from('market_access_records').update(patch).eq('id', existing.id).select().single();
   if (error) throw error;
@@ -77,14 +83,18 @@ async function update(req, res) {
 // DELETE /market-access/:recordId
 async function remove(req, res) {
   const sb = supabaseAdmin();
-  const { data: existing } = await sb
+  const { data: existing, error: readErr } = await sb
     .from('market_access_records')
     .select('id, farmers(created_by_agent_id)')
     .eq('id', req.params.recordId)
     .maybeSingle();
-  if (!existing) return notFound(res);
+  if (readErr) throw readErr;
+  if (!existing) return notFound(res, 'Market access record not found');
   if (req.user.role === 'field_agent' && existing.farmers?.created_by_agent_id !== req.user.userId) return forbidden(res);
-  await sb.from('market_access_records').delete().eq('id', req.params.recordId);
+  // FIXED — the delete's error was discarded and the handler returned 204
+  // regardless, so a blocked delete looked successful and the row reappeared.
+  const { error: delErr } = await sb.from('market_access_records').delete().eq('id', req.params.recordId);
+  if (delErr) throw delErr;
   await logActivity({ actor: req.user, action: 'market_access_deleted', entityType: 'market_access', entityId: req.params.recordId, req });
   return noContent(res);
 }

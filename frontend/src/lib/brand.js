@@ -9,14 +9,19 @@ export const BRAND = {
   accent: '#E0A82E',
 };
 
+// FIXED — three entries carried a `badge` key ('applications' / 'financing'),
+// but AppShell never read it and nothing ever rendered a count. Dead config
+// that implied a feature the sidebar does not have; the real pending-work
+// counts are on the admin dashboard's "Action required" panel.
+// Every `to` below is checked against a route in App.jsx.
 export const NAV_ADMIN = [
   { to: '/admin', label: 'Dashboard', icon: 'LayoutDashboard', end: true },
   { to: '/admin/agents', label: 'Field Agents', icon: 'UserCheck' },
-  { to: '/admin/applications', label: 'Applications', icon: 'FileCheck', badge: 'applications' },
+  { to: '/admin/applications', label: 'Applications', icon: 'FileCheck' },
   { to: '/admin/cooperatives', label: 'Cooperatives', icon: 'Users' },
   { to: '/admin/farmers', label: 'Farmers', icon: 'Sprout' },
   { to: '/admin/credit', label: 'Credit Scoring', icon: 'Gauge' },
-  { to: '/admin/financing', label: 'Financing', icon: 'Banknote', badge: 'financing' },
+  { to: '/admin/financing', label: 'Financing', icon: 'Banknote' },
   { to: '/admin/partners', label: 'Partners', icon: 'Building2' },
   { to: '/admin/benchmarks', label: 'Benchmarks', icon: 'BarChart3' },
   { to: '/admin/wallets', label: 'Wallets & Settlements', icon: 'Wallet' },
@@ -29,7 +34,7 @@ export const NAV_PARTNER = [
   { to: '/partner/cooperatives', label: 'Cooperatives', icon: 'Users' },
   { to: '/partner/farmers', label: 'Farmers', icon: 'Sprout' },
   { to: '/partner/search', label: 'Borrower Search', icon: 'Search' },
-  { to: '/partner/financing', label: 'Financing Requests', icon: 'Banknote', badge: 'financing' },
+  { to: '/partner/financing', label: 'Financing Requests', icon: 'Banknote' },
   { to: '/partner/portfolio', label: 'Portfolio', icon: 'PieChart' },
   { to: '/partner/watchlist', label: 'Risk Watchlist', icon: 'AlertTriangle' },
   { to: '/partner/settings', label: 'Profile settings', icon: 'Settings' },

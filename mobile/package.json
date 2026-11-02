@@ -15,11 +15,13 @@
     "test": "jest --passWithNoTests",
     "test:watch": "jest --watch",
     "check:contract": "node scripts/check-backend-contract.mjs",
-    "verify": "npm run typecheck && npm run lint && npm run test && npm run check:contract",
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run check:contract && npm run check:lock",
     "check:api": "node scripts/check-api-url.mjs",
-    "build:apk": "npm run check:api -- preview && eas build --platform android --profile preview",
-    "build:apk:staging": "npm run check:api -- preview-staging && eas build --platform android --profile preview-staging",
-    "build:aab": "npm run check:api -- production && eas build --platform android --profile production"
+    "check:lock": "node scripts/check-lockfile.mjs",
+    "check:build": "node scripts/check-lockfile.mjs && node scripts/check-api-url.mjs",
+    "build:apk": "npm run check:build -- preview && npx eas-cli build --platform android --profile preview",
+    "build:apk:staging": "npm run check:build -- preview-staging && npx eas-cli build --platform android --profile preview-staging",
+    "build:aab": "npm run check:build -- production && npx eas-cli build --platform android --profile production"
   },
   "dependencies": {
     "@babel/runtime": "^7.26.0",
@@ -70,7 +72,6 @@
     "@typescript-eslint/eslint-plugin": "8.21.0",
     "@typescript-eslint/parser": "8.21.0",
     "babel-preset-expo": "~58.0.22",
-    "eas-cli": "^27.2.0",
     "eslint": "8.57.1",
     "eslint-config-prettier": "9.1.0",
     "eslint-plugin-import": "2.31.0",

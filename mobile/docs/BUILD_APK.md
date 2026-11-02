@@ -6,9 +6,19 @@ The short version, on any machine with Node 20 and this folder:
 cd mobile
 npm install
 npx eas-cli login          # your Expo account — free, one-time
-npx eas-cli init           # one-time, links this app to an EAS project
 npm run build:apk
 ```
+
+There is no `eas init` step: the project already exists
+(`@dammy-v/heabron-mobile`) and both `owner` and `extra.eas.projectId` are
+set in `app.config.ts`. Running `eas init` again would offer to create a
+second project — say no if it ever asks.
+
+> If you ran `eas init` and it stopped with *"Cannot automatically write to
+> dynamic config at: app.config.ts"*, that is expected and already handled.
+> `eas init` edits a static `app.json`; this project uses TypeScript config,
+> which it cannot edit, so it prints the project ID and stops. The ID it
+> printed is in `app.config.ts` under `extra.eas.projectId`.
 
 The last command prints a link. When the build finishes (10–20 minutes for a
 first build, faster after) that page has a **Download** button and a QR code.
@@ -21,20 +31,37 @@ The build happens on Expo's servers.
 
 ## What `npm run build:apk` does
 
-1. **Checks the API first.** `scripts/check-api-url.mjs` reads the URL the
-   build will use out of `eas.json` and calls `GET <url>/health`. A build
-   takes fifteen minutes; a wrong URL costs that twice, because the APK
-   installs fine and only fails when a tester taps Sign in. This catches it in
-   about a second, and stops the build.
-2. **Builds a release APK** on EAS with the `preview` profile, signed, pointed
+Two checks, then the build. Both checks exist because EAS fails *slowly*:
+queue, spin up a builder, install, and only then discover the problem.
+
+1. **The lock file matches package.json.** EAS installs with `npm ci`, which
+   refuses outright when they disagree — it does not fall back to
+   `npm install`. Nothing locally notices, because `npm install` and
+   `expo start` both repair the lock as they go. `scripts/check-lockfile.mjs`
+   runs the builder's own `npm ci --dry-run` here instead.
+2. **The API answers.** `scripts/check-api-url.mjs` reads the URL the build
+   will use out of `eas.json` and calls `GET <url>/health`. A wrong URL costs
+   the whole build twice over, because the APK installs fine and only fails
+   when a tester taps Sign in.
+3. **Builds a release APK** on EAS with the `preview` profile, signed, pointed
    at the live API.
 
-If the check fails but you are sure the URL is right (the server is asleep,
-say), build without it:
+If a check fails but you are sure it is wrong (the server is asleep, say),
+build without them:
 
 ```bash
 npx eas-cli build --platform android --profile preview
 ```
+
+### If the build fails at "Install dependencies"
+
+```
+npm error `npm ci` can only install packages when your package.json and
+npm error package-lock.json ... are in sync.
+```
+
+Run `npm install`, make sure the updated `package-lock.json` is saved, and
+build again. `npm run check:lock` reproduces this in a few seconds.
 
 ## Profiles
 
@@ -55,7 +82,7 @@ One place, `eas.json`:
 "preview": {
   "env": {
     "USE_STAGING": "false",
-    "PRODUCTION_BASE_URL": "https://heabroncoopscore.com/api"
+    "PRODUCTION_BASE_URL": "https://api.heabroncoopscore.com/api"
   }
 }
 ```
@@ -70,9 +97,12 @@ server, which fails the build rather than letting a broken APK out. Android
 blocks cleartext traffic in release builds, so `http://` cannot work on a
 phone even if it works in the simulator.
 
-> Confirm `https://heabroncoopscore.com/api` is right before the first build.
-> `npm run check:api -- preview` answers in a second: a JSON body means yes;
-> HTML means the dashboard answered instead of the API and the URL is wrong.
+> The API is on its own subdomain, `api.heabroncoopscore.com` — **not** the
+> domain the dashboard is served from. `heabroncoopscore.com/api/health`
+> answers 200 with the dashboard's HTML, because the SPA serves its index
+> page for any path it does not recognise; an APK built against it installs
+> fine and then fails on the first request. `npm run check:api` exists for
+> exactly that: it rejects an HTML body even on a 200.
 
 ## Signing
 
@@ -83,6 +113,13 @@ first.
 
 Do not generate a new keystore later for the same app — a differently-signed
 APK will not install over an existing one.
+
+For the same reason, builds must come from the `dammy-v` account, which is
+why `owner` is pinned in `app.config.ts`. Someone building from their own
+Expo account would get a separate project with a separate keystore, and the
+APKs it produced would refuse to install over the ones testers already have.
+To let a colleague build, add them to the `dammy-v` account on expo.dev
+rather than letting them create their own project.
 
 ## Version numbers
 
@@ -110,8 +147,16 @@ and their data stays.
 npm run verify
 ```
 
-Typecheck, lint, 232 tests and the backend contract check. Worth the ninety
-seconds: a build that fails on EAS still costs the queue time.
+Typecheck, lint, 232 tests, the backend contract check and the lock-file
+check. Worth the ninety seconds: a build that fails on EAS still costs the
+queue time.
+
+## Node version
+
+The builder runs Node 22.13.0, set in `eas.json` under `build.base.node`.
+Expo SDK 58 and React Native 0.88 require `^22.13.0 || ^24.3.0 || >=26.0.0` —
+on Node 20 the install fills with `EBADENGINE` warnings and the build is not
+supported. Use Node 22 locally too, for the same reason.
 
 ---
 
@@ -144,5 +189,5 @@ Set the API URL for a local build in the environment, since `eas.json` is not
 read here:
 
 ```bash
-USE_STAGING=false PRODUCTION_BASE_URL=https://heabroncoopscore.com/api npm run prebuild:android
+USE_STAGING=false PRODUCTION_BASE_URL=https://api.heabroncoopscore.com/api npm run prebuild:android
 ```

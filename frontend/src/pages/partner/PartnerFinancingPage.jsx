@@ -8,6 +8,7 @@ import { DataTable, Pagination } from '@/components/ui/DataTable';
 import { EmptyState, StatusPill, TierPill } from '@/components/ui/Card';
 import { Card } from '@/components/ui/Card';
 import { formatNaira, relativeTime, humanize, formatScore } from '@/lib/utils';
+import { statusTabs } from '@/lib/statuses';
 
 const PAGE_SIZE = 25;
 
@@ -15,14 +16,14 @@ const PAGE_SIZE = 25;
 const SEASON_LABELS = { wet: 'Wet', dry: 'Dry', all_year: 'All Year' };
 
 // financing_status enum — the only values the `status` filter accepts.
-const STATUS_FILTERS = [
-  { value: '', label: 'All' },
-  { value: 'pending', label: 'Pending' },
-  { value: 'approved', label: 'Approved' },
-  { value: 'rejected', label: 'Rejected' },
-  { value: 'disbursed', label: 'Disbursed' },
-  { value: 'completed', label: 'Completed' },
-];
+const STATUS_FILTERS = statusTabs('financing_status', [
+  ['', 'All'],
+  ['pending', 'Pending'],
+  ['approved', 'Approved'],
+  ['rejected', 'Rejected'],
+  ['disbursed', 'Disbursed'],
+  ['completed', 'Completed'],
+]).map(([value, label]) => ({ value, label }));
 
 export default function PartnerFinancingPage() {
   const navigate = useNavigate();

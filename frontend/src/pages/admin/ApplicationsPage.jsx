@@ -10,6 +10,11 @@ import { Modal } from '@/components/ui/Modal';
 import { Field, Textarea } from '@/components/ui/Input';
 import { DataTable, Pagination } from '@/components/ui/DataTable';
 import { formatDateTime, formatDate, initials } from '@/lib/utils';
+import { statusValues } from '@/lib/statuses';
+
+// `agent_applications.status` is the `user_status` enum. A tab that spells a
+// value it does not have returns 400, not an empty list.
+const TABS = statusValues('user_status', ['pending', 'active', 'rejected']);
 
 export default function ApplicationsPage() {
   const [status, setStatus] = useState('pending');
@@ -100,7 +105,7 @@ export default function ApplicationsPage() {
       />
 
       <div className="flex items-center gap-2 mb-4">
-        {['pending', 'active', 'rejected'].map((s) => (
+        {TABS.map((s) => (
           <button type="button"
             key={s}
             onClick={() => { setStatus(s); setPage(1); }}

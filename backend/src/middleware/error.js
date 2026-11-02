@@ -2,6 +2,7 @@
 
 const logger = require('../utils/logger');
 const { notFound, serverError, fail } = require('../utils/response');
+const { parseEnumViolation } = require('../utils/enums');
 
 function notFoundHandler(req, res) {
   return notFound(res, `Route not found: ${req.method} ${req.originalUrl}`);
@@ -138,6 +139,34 @@ function errorHandler(err, req, res, next) {
         'CONFLICT',
         known.message,
         known.field ? [{ field: known.field, message: known.message }] : undefined
+      );
+    }
+  }
+
+  /**
+   * 22P02 on an enum column, said in words.
+   *
+   * The generic mapping is "A value had the wrong type", which is true and
+   * undiagnosable: it names neither the field, the value, nor what was
+   * allowed. On a list endpoint it reads as a screen that will not load.
+   *
+   * Every status filter this API exposes is now pinned to its enum's labels
+   * in the validators, so this branch should be unreachable from a query
+   * string — but a body field, a sub-resource or a value written straight
+   * through from an import can still reach Postgres, and when it does the
+   * response should say which value was refused and what is accepted.
+   */
+  if (err && err.code === '22P02') {
+    const violation = parseEnumViolation(err);
+    if (violation) {
+      const allowed = violation.allowed
+        ? ` Allowed values are: ${violation.allowed.join(', ')}.`
+        : '';
+      return fail(
+        res,
+        400,
+        'BAD_REQUEST',
+        `"${violation.value}" is not a valid ${violation.type.replace(/_/g, ' ')}.${allowed}`
       );
     }
   }

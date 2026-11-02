@@ -10,6 +10,10 @@ import { Modal } from '@/components/ui/Modal';
 import { Field, Input, Select, Textarea } from '@/components/ui/Input';
 import { ImageUpload } from '@/components/ui/ImageUpload';
 import { formatNaira, formatDate, formatScore, humanize, relativeTime } from '@/lib/utils';
+import { statusFilter } from '@/lib/statuses';
+
+// `partners.status` is the `user_status` enum.
+const ACTIVE_PARTNER = statusFilter('user_status', 'active');
 
 // createFinancingRequest.season: wet | dry | all_year.
 const SEASON_LABELS = { wet: 'Wet', dry: 'Dry', all_year: 'All Year' };
@@ -210,7 +214,7 @@ function DecisionModal({ open, kind, request, onClose, onDone }) {
   // 100 by the validator, so 100 is the maximum that can be requested here.
   const { data: partners } = useQuery({
     queryKey: ['admin-partners-active'],
-    queryFn: () => api.list('/admin/partners', { params: { status: 'active', pageSize: 100 } }),
+    queryFn: () => api.list('/admin/partners', { params: { status: ACTIVE_PARTNER, pageSize: 100 } }),
     enabled: kind === 'forward',
   });
   const partnerOptions = partners?.data || [];

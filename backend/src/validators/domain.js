@@ -2,6 +2,8 @@
 
 const Joi = require('joi');
 
+const { ENUM_LABELS } = require('../utils/enums');
+
 const uuid = Joi.string().guid({ version: ['uuidv4', 'uuidv1'] });
 const gpsLat = Joi.number().min(-90).max(90);
 const gpsLng = Joi.number().min(-180).max(180);
@@ -579,13 +581,80 @@ const listQuery = Joi.object({
   entityType: Joi.string().max(60).empty('').optional(),
   // Wallet transaction filters
   source: Joi.string().max(60).empty('').optional(),
-  transactionType: Joi.string().max(40).empty('').optional(),
+  // `wallet_transactions.transaction_type` is an enum too — same 22P02 trap
+  // as `status`, so it is pinned to its labels here rather than per route,
+  // since only one endpoint reads it.
+  transactionType: Joi.string().valid('credit', 'debit', 'settlement').empty('').optional(),
   // Notification filter
   unread: Joi.string().valid('true', 'false').empty('').optional(),
   // Partner search
   q: Joi.string().max(120).empty('').optional(),
   type: Joi.string().valid('all', 'farmer', 'cooperative').empty('').optional(),
 }).options({ stripUnknown: true });
+
+// -----------------------------------------------------------------------------
+// Status filters, per list endpoint.
+//
+// `listQuery.status` above is `Joi.string().max(60)` — it accepts anything and
+// hands it straight to `.eq('status', …)`. Every one of those columns is a
+// Postgres ENUM, and an enum comparison against a label that does not exist is
+// error 22P02, which this API maps to a flat 400 "A value had the wrong type".
+//
+// That is exactly how the admin Yield Verification screen broke: it sent
+// `status=unverified`, which is not a label on `yield_verification_status`
+// (`pending | verified | rejected`), so the default tab returned 400 with
+// nothing naming the offending value — the table simply said there were no
+// records, which is also what an empty but working list looks like.
+//
+// So each list route gets the label set of the column it actually filters.
+// A wrong value now fails in Joi with a 422 that names the field and the
+// values allowed, before any query is built. The sets below are checked
+// against the schema's CREATE TYPE statements by `npm run check:enums`, so
+// they cannot drift from the database.
+// -----------------------------------------------------------------------------
+
+/**
+ * `listQuery` with `status` narrowed to one enum's labels.
+ *
+ * `.keys()` replaces only that one key, so every other filter — pagination,
+ * search, the date range — keeps the definition above.
+ */
+function listQueryWithStatus(enumType) {
+  const labels = ENUM_LABELS[enumType];
+  /* istanbul ignore next — a typo here is a programmer error, not input */
+  if (!labels) throw new Error(`listQueryWithStatus: unknown enum ${enumType}`);
+  return listQuery.keys({
+    status: Joi.string()
+      .valid(...labels)
+      .empty('')
+      .optional(),
+  });
+}
+
+/**
+ * Which endpoint filters which column. The key is how routes refer to it; the
+ * comment is the table and column, because that is the thing that must match.
+ */
+const listQueries = {
+  // agent_applications.status
+  agentApplications: listQueryWithStatus('user_status'),
+  // profiles.status
+  agents: listQueryWithStatus('user_status'),
+  // partners.status
+  partners: listQueryWithStatus('user_status'),
+  // seasonal_productions.verification_status
+  productions: listQueryWithStatus('yield_verification_status'),
+  // financing_requests.status
+  financing: listQueryWithStatus('financing_status'),
+  // change_requests.status
+  changeRequests: listQueryWithStatus('change_request_status'),
+  // data_consents.status
+  consent: listQueryWithStatus('consent_status'),
+  // settlement_requests.status
+  settlements: listQueryWithStatus('settlement_status'),
+  // wallet_transactions.status
+  transactions: listQueryWithStatus('transaction_status'),
+};
 
 // =============================================================================
 // DATA CONSENT (agent + admin)
@@ -705,6 +774,8 @@ module.exports = {
   suspendAgent,
   updateProfile,
   listQuery,
+  listQueries,
+  ENUM_LABELS,
   recordConsent,
   verifyConsentOtp,
   withdrawConsent,

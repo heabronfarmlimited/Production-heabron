@@ -39,16 +39,16 @@ router.get('/dashboard', asyncHandler(dashboard.adminDashboard));
 router.patch('/profile', validate(v.updateProfile), asyncHandler(profile.updateProfile));
 
 // --- Agent applications + agents ---
-router.get('/agent-applications', validate(v.listQuery, 'query'), asyncHandler(agents.listApplications));
+router.get('/agent-applications', validate(v.listQueries.agentApplications, 'query'), asyncHandler(agents.listApplications));
 router.get('/agent-applications/:applicationId', requireParamUuid('applicationId'), asyncHandler(agents.getApplication));
 router.post('/agent-applications/:applicationId/decision', requireParamUuid('applicationId'), validate(v.decideAgentApplication), asyncHandler(agents.decideApplication));
-router.get('/agents', validate(v.listQuery, 'query'), asyncHandler(agents.listAgents));
+router.get('/agents', validate(v.listQueries.agents, 'query'), asyncHandler(agents.listAgents));
 router.get('/agents/:agentId', requireParamUuid('agentId'), asyncHandler(agents.getAgent));
 router.post('/agents/:agentId/suspend', requireParamUuid('agentId'), validate(v.suspendAgent), asyncHandler(agents.suspendAgent));
 router.post('/agents/:agentId/reactivate', requireParamUuid('agentId'), asyncHandler(agents.reactivateAgent));
 
 // --- Partners (lenders/investors) — admin-controlled onboarding only ---
-router.get('/partners', validate(v.listQuery, 'query'), asyncHandler(partners.listPartners));
+router.get('/partners', validate(v.listQueries.partners, 'query'), asyncHandler(partners.listPartners));
 router.post('/partners', validate(v.createPartner), asyncHandler(partners.createPartner));
 router.get('/partners/:partnerId', requireParamUuid('partnerId'), asyncHandler(partners.getPartner));
 router.patch('/partners/:partnerId', requireParamUuid('partnerId'), validate(v.updatePartner), asyncHandler(partners.updatePartner));
@@ -74,14 +74,14 @@ router.get('/farmers/:farmerId/field-notes', requireParamUuid('farmerId'), async
 router.post('/farmers/:farmerId/map-farm', requireParamUuid('farmerId'), validate(v.mapFarm), asyncHandler(farmers.mapFarm));
 
 // --- Seasonal yield / productions + verification ---
-router.get('/productions', validate(v.listQuery, 'query'), asyncHandler(productions.list));
+router.get('/productions', validate(v.listQueries.productions, 'query'), asyncHandler(productions.list));
 router.get('/productions/:productionId', requireParamUuid('productionId'), asyncHandler(productions.getById));
 router.patch('/productions/:productionId', requireParamUuid('productionId'), validate(v.updateProduction), asyncHandler(productions.update));
 router.post('/productions/:productionId/verify', requireParamUuid('productionId'), validate(v.verifyProduction), asyncHandler(productions.verify));
 router.get('/cooperatives/:cooperativeId/yield-volume', requireParamUuid('cooperativeId'), asyncHandler(productions.cooperativeYieldVolume));
 
 // --- Pending changes (review + decide) ---
-router.get('/change-requests', validate(v.listQuery, 'query'), asyncHandler(changeRequests.list));
+router.get('/change-requests', validate(v.listQueries.changeRequests, 'query'), asyncHandler(changeRequests.list));
 router.get('/change-requests/:changeRequestId', requireParamUuid('changeRequestId'), asyncHandler(changeRequests.getById));
 router.post('/change-requests/:changeRequestId/decision', requireParamUuid('changeRequestId'), validate(v.decideChangeRequest), asyncHandler(changeRequests.decide));
 
@@ -89,7 +89,7 @@ router.post('/change-requests/:changeRequestId/decision', requireParamUuid('chan
 router.get('/deliveries', validate(v.listQuery, 'query'), asyncHandler(deliveries.list));
 
 // --- Financing ---
-router.get('/financing-requests', validate(v.listQuery, 'query'), asyncHandler(financing.list));
+router.get('/financing-requests', validate(v.listQueries.financing, 'query'), asyncHandler(financing.list));
 router.get('/financing-requests/:requestId', requireParamUuid('requestId'), asyncHandler(financing.getById));
 router.post('/financing-requests/:requestId/decision', requireParamUuid('requestId'), validate(v.adminDecideFinancing), asyncHandler(financing.adminDecide));
 
@@ -117,13 +117,13 @@ router.post('/benchmarks', validate(v.upsertBenchmark), asyncHandler(benchmarks.
 
 // --- Wallet / settlements / manual payment flow ---
 router.get('/wallets', validate(v.listQuery, 'query'), asyncHandler(adminWallet.listAllWallets));
-router.get('/settlements', validate(v.listQuery, 'query'), asyncHandler(adminWallet.listSettlements));
+router.get('/settlements', validate(v.listQueries.settlements, 'query'), asyncHandler(adminWallet.listSettlements));
 router.post('/settlements/:settlementId/decision', requireParamUuid('settlementId'), validate(v.decideSettlement), asyncHandler(adminWallet.decideSettlement));
 // NEW — admin records a manual transfer of cash to a field agent with receipt proof
 router.post('/disbursements', validate(v.recordAgentDisbursement), asyncHandler(adminWallet.recordAgentDisbursement));
 router.get('/transactions', validate(v.listQuery, 'query'), asyncHandler(adminWallet.listAllTransactions));
 // NEW — field-agent purchase proofs: list + confirm/reject
-router.get('/cash-purchases', validate(v.listQuery, 'query'), asyncHandler(adminWallet.listCashPurchases));
+router.get('/cash-purchases', validate(v.listQueries.transactions, 'query'), asyncHandler(adminWallet.listCashPurchases));
 router.post('/cash-purchases/:transactionId/confirm', requireParamUuid('transactionId'), validate(v.confirmCashPurchase), asyncHandler(adminWallet.confirmCashPurchase));
 
 // --- Activity logs ---
@@ -148,7 +148,7 @@ router.get('/farmers/:farmerId/credit-report', requireParamUuid('farmerId'), asy
 router.get('/cooperatives/:cooperativeId/credit-report', requireParamUuid('cooperativeId'), asyncHandler(creditReport.cooperativeCreditReport));
 
 // --- Data consent ---
-router.get('/consent', validate(v.listQuery, 'query'), asyncHandler(consent.listConsent));
+router.get('/consent', validate(v.listQueries.consent, 'query'), asyncHandler(consent.listConsent));
 router.get('/consent/:consentId', requireParamUuid('consentId'), asyncHandler(consent.getConsent));
 router.post('/consent/:consentId/withdraw', requireParamUuid('consentId'), validate(v.withdrawConsent), asyncHandler(consent.withdrawConsent));
 

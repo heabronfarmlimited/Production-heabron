@@ -11,6 +11,16 @@ import { Input, Field, Textarea } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 import { DataTable, Pagination } from '@/components/ui/DataTable';
 import { initials, formatDate } from '@/lib/utils';
+import { statusTabs } from '@/lib/statuses';
+
+// `profiles.status` is the `user_status` enum.
+const STATUS_OPTIONS = statusTabs('user_status', [
+  ['', 'All statuses'],
+  ['active', 'Active'],
+  ['pending', 'Pending'],
+  ['suspended', 'Suspended'],
+  ['rejected', 'Rejected'],
+]);
 
 const PAGE_SIZE = 20;
 
@@ -116,11 +126,11 @@ export default function AgentsPage() {
             className="input max-w-[200px]"
             aria-label="Filter agents by status"
           >
-            <option value="">All statuses</option>
-            <option value="active">Active</option>
-            <option value="pending">Pending</option>
-            <option value="suspended">Suspended</option>
-            <option value="rejected">Rejected</option>
+            {STATUS_OPTIONS.map(([value, label]) => (
+              <option key={value || 'all'} value={value}>
+                {label}
+              </option>
+            ))}
           </select>
         </div>
       </Card>

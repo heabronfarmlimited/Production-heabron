@@ -10,6 +10,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Field, Textarea } from '@/components/ui/Input';
 import { DataTable, Pagination } from '@/components/ui/DataTable';
 import { formatDate, formatDateTime, formatScore, humanize } from '@/lib/utils';
+import { statusTabs } from '@/lib/statuses';
 
 /**
  * Yield verification.
@@ -19,15 +20,35 @@ import { formatDate, formatDateTime, formatScore, humanize } from '@/lib/utils';
  * `/admin/productions/:id/verify` have been served all along with nothing
  * calling them.
  *
- * A season's production is recorded by a field agent and starts
- * `unverified`. The production half of the score — half the final score — is
- * built on the actual yield against the regional benchmark, and an
- * unverified yield is an agent's unchecked word. With no screen, nothing was
- * ever verified: every farmer in the system is being scored on unverified
- * production, and no one could see that, let alone change it.
+ * A season's production is recorded by a field agent and starts `pending`.
+ * The production half of the score — half the final score — is built on the
+ * actual yield against the regional benchmark, and a pending yield is an
+ * agent's unchecked word. With no screen, nothing was ever verified: every
+ * farmer in the system is being scored on unverified production, and no one
+ * could see that, let alone change it.
+ *
+ * The status values here are the `yield_verification_status` enum —
+ * `pending | verified | rejected` — and nothing else. This page originally
+ * sent `unverified`, which is not a label on that type, so Postgres rejected
+ * the comparison with 22P02 and the whole screen returned 400 ("A value had
+ * the wrong type") on its default tab. The word for the unchecked state is
+ * `pending` in the database; "Unverified" is only ever a label on screen.
  */
+/**
+ * Tab value -> label. The value is the enum label the API filters on; the
+ * label is only what an administrator reads, which is why the pending tab
+ * reads "Unverified" while sending `pending`. `statusTabs` refuses a value
+ * that is not a label on the type, which is what this page needed.
+ */
+const TABS = statusTabs('yield_verification_status', [
+  ['pending', 'Unverified'],
+  ['verified', 'Verified'],
+  ['rejected', 'Rejected'],
+  ['', 'All'],
+]);
+
 export default function ProductionsPage() {
-  const [verificationStatus, setStatus] = useState('unverified');
+  const [verificationStatus, setStatus] = useState('pending');
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState(null);
   const qc = useQueryClient();
@@ -129,7 +150,7 @@ export default function ProductionsPage() {
     {
       key: 'status',
       label: 'Verification',
-      render: (r) => <StatusPill status={r.verification_status || 'unverified'} />,
+      render: (r) => <StatusPill status={r.verification_status || 'pending'} />,
     },
     {
       key: 'recorded',
@@ -167,12 +188,7 @@ export default function ProductionsPage() {
       </Card>
 
       <div className="flex items-center gap-2 mb-4">
-        {[
-          ['unverified', 'Unverified'],
-          ['verified', 'Verified'],
-          ['rejected', 'Rejected'],
-          ['', 'All'],
-        ].map(([value, label]) => (
+        {TABS.map(([value, label]) => (
           <button
             type="button"
             key={value || 'all'}
@@ -206,7 +222,11 @@ export default function ProductionsPage() {
         empty={
           <EmptyState
             icon={Sprout}
-            title={`No ${verificationStatus || ''} production records`.replace('  ', ' ')}
+            title={`No ${
+              verificationStatus
+                ? `${(TABS.find(([v]) => v === verificationStatus)?.[1] ?? '').toLowerCase()} `
+                : ''
+            }production records`}
             description="Seasons recorded by field agents appear here for verification."
           />
         }
@@ -237,7 +257,7 @@ function ProductionModal({ production, onClose, onDecide, submitting }) {
   const [notes, setNotes] = useState('');
 
   const p = production;
-  const isPending = (p.verification_status || 'unverified') === 'unverified';
+  const isPending = (p.verification_status || 'pending') === 'pending';
 
   /**
    * Yield per hectare, which is what the score actually divides by.
@@ -298,7 +318,7 @@ function ProductionModal({ production, onClose, onDecide, submitting }) {
     >
       <div className="space-y-4">
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-          <KV label="Status" value={<StatusPill status={p.verification_status || 'unverified'} />} />
+          <KV label="Status" value={<StatusPill status={p.verification_status || 'pending'} />} />
           <KV label="Cycle" value={p.cycle_number ?? '—'} />
           <KV label="Crop" value={<span className="capitalize">{p.crop || '—'}</span>} />
           <KV

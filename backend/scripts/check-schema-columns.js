@@ -136,6 +136,90 @@ function readSchema() {
   return tables;
 }
 
+// ───────────────────────────────────────────────── the enum types
+
+/**
+ * Enum labels, and which column is of which enum type.
+ *
+ * WHY: an enum comparison against a label that does not exist is not an empty
+ * result. Postgres raises 22P02 and the whole request fails. The admin Yield
+ * Verification screen shipped sending `status=unverified` on a column whose
+ * type is `yield_verification_status` (`pending | verified | rejected`), so
+ * its default tab returned 400 and the table showed nothing — which looks
+ * exactly like a working list with no records in it.
+ *
+ * A column check cannot catch that: `verification_status` exists. Only the
+ * VALUE is wrong, so the value needs checking too.
+ */
+function readEnums() {
+  const labels = new Map();
+  const columnEnum = new Map(); // table -> Map(column -> enum type)
+  const files = fs
+    .readdirSync(path.join(ROOT, 'migrations'))
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+
+  for (const file of files) {
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations', file), 'utf8');
+
+    for (const m of sql.matchAll(/CREATE TYPE (?:public\.)?(\w+) AS ENUM\s*\(([\s\S]*?)\)/gi)) {
+      if (!labels.has(m[1])) {
+        labels.set(m[1], [...m[2].matchAll(/'([^']*)'/g)].map((x) => x[1]));
+      }
+    }
+    // `ALTER TYPE … ADD VALUE IF NOT EXISTS 'x'` is how later labels arrive on
+    // an existing database; they count just as much as the original list.
+    for (const m of sql.matchAll(
+      /ALTER TYPE (?:public\.)?(\w+) ADD VALUE (?:IF NOT EXISTS )?'([^']*)'/gi,
+    )) {
+      const list = labels.get(m[1]);
+      if (list && !list.includes(m[2])) list.push(m[2]);
+    }
+  }
+
+  const typed = (table, column, type) => {
+    if (!labels.has(type)) return;
+    if (!columnEnum.has(table)) columnEnum.set(table, new Map());
+    columnEnum.get(table).set(column, type);
+  };
+
+  for (const file of files) {
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations', file), 'utf8');
+
+    // CREATE TABLE bodies — same brace-matched read as readSchema().
+    const createRe = /CREATE TABLE (?:IF NOT EXISTS )?(?:public\.)?(\w+)\s*\(/gi;
+    let m;
+    while ((m = createRe.exec(sql))) {
+      const table = m[1];
+      let depth = 1;
+      let i = createRe.lastIndex;
+      while (i < sql.length && depth > 0) {
+        if (sql[i] === '(') depth += 1;
+        else if (sql[i] === ')') depth -= 1;
+        i += 1;
+      }
+      const body = sql
+        .slice(createRe.lastIndex, i - 1)
+        .replace(/--[^\n]*/g, '')
+        .replace(/\/\*[\s\S]*?\*\//g, '');
+      for (const line of body.split(/,(?![^(]*\))/)) {
+        const def = /^\s*"?(\w+)"?\s+(?:public\.)?(\w+)/.exec(line);
+        if (def) typed(table, def[1], def[2]);
+      }
+    }
+
+    for (const a of sql.matchAll(/ALTER TABLE (?:IF EXISTS )?(?:public\.)?(\w+)([\s\S]*?);/gi)) {
+      for (const add of a[2].matchAll(
+        /ADD COLUMN (?:IF NOT EXISTS )?"?(\w+)"?\s+(?:public\.)?(\w+)/gi,
+      )) {
+        typed(a[1], add[1], add[2]);
+      }
+    }
+  }
+
+  return { labels, columnEnum };
+}
+
 // ───────────────────────────────────────────────── the code
 
 function walk(dir, out = []) {
@@ -301,9 +385,199 @@ function selectColumns(sel) {
 }
 
 const schema = readSchema();
+const { labels: enumLabels, columnEnum } = readEnums();
 const findings = [];
+const badValues = [];
 const skipped = [];
 let checks = 0;
+let valueChecks = 0;
+
+/** The enum type of `table.column`, or null when the column is not an enum. */
+const enumTypeOf = (table, column) => columnEnum.get(table)?.get(column) || null;
+
+/**
+ * Records a literal written to an enum column, if it is not a label.
+ *
+ * Only string literals are judged. A variable, a template literal with an
+ * interpolation, or anything computed is left alone — a checker that guesses
+ * is worse than no checker, which this codebase learned the hard way.
+ */
+function checkEnumValue({ table, column, value, where, how }) {
+  const type = enumTypeOf(table, column);
+  if (!type) return;
+  const allowed = enumLabels.get(type);
+  if (!allowed) return;
+  valueChecks += 1;
+  if (!allowed.includes(value)) {
+    badValues.push({ where, table, column, type, value, allowed, how });
+  }
+}
+
+/**
+ * `key: 'literal'` pairs of an object literal, and only those.
+ *
+ * Matching `(\w+)\s*:\s*'…'` anywhere in the body is not good enough, and the
+ * first version of this did exactly that: a ternary inside a value —
+ *
+ *     nin_verification_status: r.status === 'verified' ? r.status : 'failed',
+ *
+ * ends in `status : 'failed'`, which that pattern reads as the property
+ * `status` being set to `failed`, and reported a working write as broken. So
+ * the body is split on top-level commas (strings and nesting respected) and
+ * each part must be a whole `key: 'literal'` and nothing else. A computed
+ * value is then simply not checkable, which is the correct answer for it.
+ */
+function objectLiteralPairs(body) {
+  const parts = [];
+  let buf = '';
+  let depth = 0;
+  let quote = null;
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i];
+    if (quote) {
+      buf += ch;
+      if (ch === '\\') {
+        buf += body[i + 1] ?? '';
+        i += 1;
+      } else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+      buf += ch;
+      continue;
+    }
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    else if (ch === ')' || ch === ']' || ch === '}') depth -= 1;
+    if (ch === ',' && depth === 0) {
+      parts.push(buf);
+      buf = '';
+      continue;
+    }
+    buf += ch;
+  }
+  parts.push(buf);
+
+  const pairs = [];
+  for (const raw of parts) {
+    const part = raw.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '').trim();
+    const m = /^(\w+)\s*:\s*(['"])([^'"\\]*)\2$/.exec(part);
+    if (m) pairs.push({ key: m[1], value: m[3] });
+  }
+  return pairs;
+}
+
+/**
+ * The object literal a name was last assigned before `before`, as text.
+ *
+ * Writes in this codebase are almost never inline: they are built as
+ * `const row = { … }` and then `.insert(row)`. Checking only inline literals
+ * would therefore miss nearly every write, including the one that sets a
+ * season's verification status. Returns null when the name is not bound to a
+ * plain object literal, which leaves it unchecked rather than guessed at.
+ */
+function objectLiteralFor(src, name, before) {
+  const re = new RegExp(`(?:const|let|var)\\s+${name}\\s*=\\s*\\{`, 'g');
+  let last = null;
+  let m;
+  while ((m = re.exec(src)) && m.index < before) last = m;
+  if (!last) return null;
+  let depth = 1;
+  let i = last.index + last[0].length;
+  let quote = null;
+  for (; i < src.length && depth > 0; i += 1) {
+    const ch = src[i];
+    if (quote) {
+      if (ch === '\\') i += 1;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') quote = ch;
+    else if (ch === '/' && src[i + 1] === '/') i = src.indexOf('\n', i);
+    else if (ch === '/' && src[i + 1] === '*') i = src.indexOf('*/', i + 2) + 1;
+    else if (ch === '{') depth += 1;
+    else if (ch === '}') depth -= 1;
+    if (i < 0) return null;
+  }
+  return src.slice(last.index + last[0].length, i - 1);
+}
+
+/** String literals passed to a filter: `.eq('col', 'value')`, `.in('col', ['a','b'])`. */
+function filterValues(argsText) {
+  // Everything after the first top-level comma.
+  const comma = argsText.indexOf(',');
+  if (comma === -1) return [];
+  const rest = argsText.slice(comma + 1);
+  // A template literal or an identifier means the value is computed; only
+  // plain quoted strings are checkable.
+  if (/\$\{/.test(rest)) return [];
+  return [...rest.matchAll(/(['"])([^'"\\]*)\1/g)].map((m) => m[2]);
+}
+
+/**
+ * Checks the filters and writes in one fragment of a query against `table`.
+ *
+ * Shared by the two ways a query is written here: chained straight onto
+ * `.from(…)`, and applied later to a variable holding the builder.
+ */
+function checkFragment({ table, known, fragment, base, rel, line, lineOf, src }) {
+  const at = (offset) => (base === null ? `${rel}:${line}` : `${rel}:${lineOf(base + offset)}`);
+
+  // .eq('col', …), .order('col'), .gte/.lte/.in/.is/.neq
+  for (const f of fragment.matchAll(
+    /\.(eq|neq|gt|gte|lt|lte|is|in|order|like|ilike)\(\s*(['"`])(\w+)\2([^)]*)\)/g,
+  )) {
+    const col = f[3];
+    checks += 1;
+    if (!known.has(col)) {
+      // An embedded filter like .eq('financing_requests.cooperative_id', …)
+      // is dotted and excluded by \w+, so anything here is a real column.
+      findings.push({ where: `${rel}:${line}`, table, column: `${col} (in .${f[1]}())` });
+      continue;
+    }
+    if (f[1] === 'eq' || f[1] === 'neq' || f[1] === 'in') {
+      for (const value of filterValues(f[4])) {
+        checkEnumValue({ table, column: col, value, where: at(f.index), how: `.${f[1]}()` });
+      }
+    }
+  }
+
+  /**
+   * Literals written into an enum column by an insert or an update.
+   *
+   * A filter with a bad label fails loudly. A WRITE with a bad label fails
+   * loudly too — but only on the code path that performs it, which may be a
+   * rejection branch nobody exercises until a real rejection happens.
+   */
+  for (const w of fragment.matchAll(/\.(insert|update|upsert)\(\s*\{([\s\S]*?)\}\s*[,)]/g)) {
+    for (const pair of objectLiteralPairs(w[2])) {
+      checkEnumValue({
+        table,
+        column: pair.key,
+        value: pair.value,
+        where: at(w.index),
+        how: `.${w[1]}()`,
+      });
+    }
+  }
+
+  // `.insert(row)` where `row` is a `const row = { … }` nearby.
+  if (base !== null) {
+    for (const w of fragment.matchAll(/\.(insert|update|upsert)\(\s*(\w+)\s*[,)]/g)) {
+      const body = objectLiteralFor(src, w[2], base);
+      if (!body) continue;
+      for (const pair of objectLiteralPairs(body)) {
+        checkEnumValue({
+          table,
+          column: pair.key,
+          value: pair.value,
+          where: at(w.index),
+          how: `.${w[1]}(${w[2]})`,
+        });
+      }
+    }
+  }
+}
 
 const files = walk(SRC);
 for (const file of files) {
@@ -346,18 +620,87 @@ for (const file of files) {
       skipped.push(`${rel}:${line} ${table} (select built dynamically)`);
     }
 
-    // .eq('col', …), .order('col'), .gte/.lte/.in/.is/.neq
-    for (const f of after.matchAll(
-      /\.(eq|neq|gt|gte|lt|lte|is|in|order|like|ilike)\(\s*(['"`])(\w+)\2/g,
-    )) {
-      const col = f[3];
-      checks += 1;
-      if (!known.has(col)) {
-        // An embedded filter like .eq('financing_requests.cooperative_id', …)
-        // is dotted and excluded by \w+, so anything here is a real column.
-        findings.push({ where: `${rel}:${line}`, table, column: `${col} (in .${f[1]}())` });
-      }
+    checkFragment({
+      table,
+      known,
+      fragment: after,
+      base: m.index + m[0].length,
+      rel,
+      line,
+      lineOf,
+      src,
+    });
+  }
+
+  /**
+   * Filters applied to a query held in a VARIABLE, not chained to `.from()`.
+   *
+   * Every list endpoint in this codebase is written as
+   *
+   *     let q = sb.from('seasonal_productions').select(…);
+   *     if (status) q = q.eq('verification_status', status);
+   *
+   * and `chainAfter` stops at the end of the first statement, so none of
+   * those conditional filters were ever checked — a blind spot big enough to
+   * hide the whole of every list route. Found by reintroducing the
+   * `status=unverified` bug and watching the check still pass.
+   *
+   * The region attributed to the variable runs from the assignment to the end
+   * of the enclosing top-level function (a `}` in column 0), or to the next
+   * `… = sb.from(` assignment of the SAME name, whichever comes first — so a
+   * function that builds two queries in turn does not cross-contaminate.
+   */
+  for (const v of src.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*\w+\s*\n?\s*\.from\((['"`])(\w+)\2\)/g)) {
+    const [, name, , table] = v;
+    if (!schema.has(table)) continue;
+    const start = v.index + v[0].length;
+    const endOfFn = src.indexOf('\n}', start);
+    const reassign = new RegExp(`\\b${name}\\s*=\\s*\\w+\\s*\\n?\\s*\\.from\\(`).exec(src.slice(start));
+    let end = endOfFn === -1 ? src.length : endOfFn;
+    if (reassign) end = Math.min(end, start + reassign.index);
+    const region = src.slice(start, end);
+
+    // Only `name.method(…)` calls, so a second query built in the same
+    // function is not misattributed. `chainAfter` does the balanced-paren,
+    // string- and comment-aware read, exactly as for a literal chain.
+    for (const use of region.matchAll(new RegExp(`\\b${name}\\b(?=\\s*\\.)`, 'g'))) {
+      const at = start + use.index + use[0].length;
+      checkFragment({
+        table,
+        known: schema.get(table),
+        fragment: chainAfter(src, at),
+        base: at,
+        rel,
+        line: lineOf(at),
+        lineOf,
+        src,
+      });
     }
+  }
+}
+
+// ───────────────────────────────────────────────── enums.js against the schema
+
+/**
+ * `src/utils/enums.js` hard-codes the labels so the validators can reject a
+ * bad status before it reaches Postgres. Hard-coded means it can drift, so it
+ * is compared against the migrations here: add a label to the schema and this
+ * fails until it is added there too.
+ */
+const enumDrift = [];
+{
+  // eslint-disable-next-line global-require
+  const { ENUM_LABELS } = require(path.join(SRC, 'utils', 'enums.js'));
+  for (const [type, declared] of Object.entries(ENUM_LABELS)) {
+    const actual = enumLabels.get(type);
+    if (!actual) {
+      enumDrift.push(`${type}: declared in enums.js but not in any migration`);
+      continue;
+    }
+    const missing = actual.filter((l) => !declared.includes(l));
+    const extra = declared.filter((l) => !actual.includes(l));
+    if (missing.length) enumDrift.push(`${type}: missing in enums.js -> ${missing.join(', ')}`);
+    if (extra.length) enumDrift.push(`${type}: in enums.js but not in the schema -> ${extra.join(', ')}`);
   }
 }
 
@@ -366,8 +709,10 @@ for (const file of files) {
 const bar = '─'.repeat(74);
 console.log(`\n${bar}\nSCHEMA COLUMN CHECK\n${bar}`);
 console.log(`  tables in schema : ${schema.size}`);
+console.log(`  enum types       : ${enumLabels.size}`);
 console.log(`  files scanned    : ${files.length}`);
 console.log(`  column checks    : ${checks}`);
+console.log(`  enum value checks: ${valueChecks}`);
 
 if (skipped.length) {
   console.log(`\n  not statically checkable (${skipped.length}):`);
@@ -384,11 +729,37 @@ if (findings.length === 0) {
   }
 }
 
+console.log(`\n${bar}\nVALUES THAT ARE NOT LABELS ON THEIR ENUM  (${badValues.length})\n${bar}`);
+if (badValues.length === 0) {
+  console.log('  none');
+} else {
+  for (const b of badValues) {
+    console.log(`  ${b.table}.${b.column} ${b.how} = "${b.value}"   ${b.where}`);
+    console.log(`      ${b.type} allows: ${b.allowed.join(' | ')}`);
+  }
+}
+
+console.log(`\n${bar}\nenums.js AGAINST THE MIGRATIONS  (${enumDrift.length})\n${bar}`);
+if (enumDrift.length === 0) {
+  console.log('  in sync');
+} else {
+  for (const d of enumDrift) console.log(`  ${d}`);
+}
+
 console.log(`\n${bar}`);
-if (findings.length) {
-  console.log(`${findings.length} column reference(s) do not exist. These fail at runtime, not at build.`);
+if (findings.length || badValues.length || enumDrift.length) {
+  if (findings.length) {
+    console.log(`${findings.length} column reference(s) do not exist. These fail at runtime, not at build.`);
+  }
+  if (badValues.length) {
+    console.log(`${badValues.length} value(s) are not labels on their enum. Postgres answers these with 22P02 — the request fails, it does not return nothing.`);
+  }
+  if (enumDrift.length) {
+    console.log(`${enumDrift.length} enum definition(s) in src/utils/enums.js no longer match the migrations.`);
+  }
   console.log(bar);
   process.exit(1);
 }
-console.log('Every statically readable column reference exists in the schema.');
+console.log('Every statically readable column reference exists, every enum value is a real label,');
+console.log('and src/utils/enums.js matches the migrations.');
 console.log(bar);

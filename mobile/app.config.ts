@@ -8,6 +8,50 @@
  */
 import type { ExpoConfig } from 'expo/config';
 
+/**
+ * The API base URL, checked at BUILD time.
+ *
+ * `src/core/config/env.ts` throws when the URL is missing, which is right for
+ * a developer running `expo start` — but on a release build that throw
+ * happens on a tester's phone, on launch, as a white screen. By then the
+ * build has taken fifteen minutes and been sent out.
+ *
+ * EAS sets `EAS_BUILD=true` on its builders, so the same mistake is caught
+ * there instead, before anything is compiled. The `/api` suffix is checked
+ * too: without it every request 404s and the app looks broken rather than
+ * misconfigured, and it is the single most common mistake with this value.
+ */
+function assertBuildEnv(): void {
+  if (process.env.EAS_BUILD !== 'true') return;
+
+  const useStaging = process.env.USE_STAGING !== 'false';
+  const name = useStaging ? 'STAGING_BASE_URL' : 'PRODUCTION_BASE_URL';
+  const url = process.env[name];
+  const profile = process.env.EAS_BUILD_PROFILE || 'unknown';
+
+  if (!url) {
+    throw new Error(
+      `[app.config] ${name} is not set for the "${profile}" build profile.\n` +
+        `Set it under build.${profile}.env in eas.json. The app cannot reach ` +
+        'any server without it, and would install and then fail on launch.',
+    );
+  }
+  if (!/^https:\/\//.test(url)) {
+    throw new Error(
+      `[app.config] ${name} must be https — got "${url}". Android blocks ` +
+        'cleartext traffic in a release build, so http:// cannot work on a phone.',
+    );
+  }
+  if (!/\/api\/?$/.test(url)) {
+    throw new Error(
+      `[app.config] ${name} must end with /api — got "${url}". Without the ` +
+        'suffix every request 404s and the app looks broken rather than misconfigured.',
+    );
+  }
+}
+
+assertBuildEnv();
+
 const config: ExpoConfig = {
   name: 'Heabron',
   slug: 'heabron-mobile',

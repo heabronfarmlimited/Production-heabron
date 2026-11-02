@@ -56,7 +56,7 @@ router.get('/farmers/:farmerId/market-access', requireParamUuid('farmerId'), asy
 router.get('/farmers/:farmerId/field-notes', requireParamUuid('farmerId'), asyncHandler(fieldNotes.listByFarmer));
 
 // Financing requests forwarded to this partner only
-router.get('/financing-requests', validate(v.listQuery, 'query'), asyncHandler(financing.list));
+router.get('/financing-requests', validate(v.listQueries.financing, 'query'), asyncHandler(financing.list));
 router.get('/financing-requests/:requestId', requireParamUuid('requestId'), asyncHandler(financing.getById));
 router.post('/financing-requests/:requestId/decision', requireParamUuid('requestId'), validate(v.partnerDecideFinancing), asyncHandler(financing.partnerDecide));
 

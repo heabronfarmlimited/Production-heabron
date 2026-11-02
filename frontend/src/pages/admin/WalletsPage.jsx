@@ -10,6 +10,13 @@ import { Modal } from '@/components/ui/Modal';
 import { Field, Input, Textarea, Select } from '@/components/ui/Input';
 import { ImageUpload } from '@/components/ui/ImageUpload';
 import { formatNaira, relativeTime, humanize } from '@/lib/utils';
+import { statusFilter, statusValues } from '@/lib/statuses';
+
+// `settlement_requests.status` and `wallet_transactions.status` are different
+// enums with overlapping-but-not-equal labels, which is exactly how a filter
+// ends up sending a value its column has never heard of.
+const SETTLEMENT_FILTERS = statusValues('settlement_status', ['pending', 'approved', 'rejected']);
+const TRANSACTION_FILTERS = statusValues('transaction_status', ['pending', 'completed', 'failed']);
 import toast from 'react-hot-toast';
 
 const PAGE_SIZE = 25;
@@ -83,7 +90,7 @@ function SettlementsTab() {
 
   return (
     <>
-      <FilterPills options={['pending', 'approved', 'rejected']} value={status} onChange={(s) => { setStatus(s); setPage(1); }} />
+      <FilterPills options={SETTLEMENT_FILTERS} value={status} onChange={(s) => { setStatus(s); setPage(1); }} />
       {isError && <LoadError label="settlement requests" error={error} />}
       <DataTable
         loading={isLoading}
@@ -237,7 +244,7 @@ function RecordDisbursementModal({ onClose, onSaved }) {
   // 100 by the validator, so the picker shows at most the first 100 agents.
   const { data: agentsData, isLoading: agentsLoading } = useQuery({
     queryKey: ['admin-agents-active-picker'],
-    queryFn: () => api.list('/admin/agents', { params: { status: 'active', pageSize: 100 } }),
+    queryFn: () => api.list('/admin/agents', { params: { status: statusFilter('user_status', 'active'), pageSize: 100 } }),
   });
   const agents = agentsData?.data || [];
 
@@ -337,7 +344,7 @@ function PurchaseProofsTab() {
   return (
     <>
       <p className="text-sm text-smoke mb-4">Field agents upload proof of what they purchased for farmers. Confirm or reject each one.</p>
-      <FilterPills options={['pending', 'completed', 'failed']} value={status} onChange={(s) => { setStatus(s); setPage(1); }} />
+      <FilterPills options={TRANSACTION_FILTERS} value={status} onChange={(s) => { setStatus(s); setPage(1); }} />
       {isError && <LoadError label="purchase proofs" error={error} />}
       <DataTable
         loading={isLoading}

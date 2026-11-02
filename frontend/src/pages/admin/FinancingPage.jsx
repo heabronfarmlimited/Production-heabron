@@ -12,11 +12,18 @@ import { Field, Input, Textarea, Select } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 import { DataTable, Pagination } from '@/components/ui/DataTable';
 import { formatNaira, formatDateTime, formatDate, humanize } from '@/lib/utils';
+import { statusFilter, statusValues } from '@/lib/statuses';
 
 const PAGE_SIZE = 20;
 
 // financing_status enum — the only values the backend `status` filter accepts.
-const STATUSES = ['pending', 'approved', 'disbursed', 'completed', 'rejected'];
+const STATUSES = statusValues('financing_status', [
+  'pending',
+  'approved',
+  'disbursed',
+  'completed',
+  'rejected',
+]);
 
 // createFinancingRequest.season: wet | dry | all_year. Labels match the field
 // app's mobile/src/core/api/domainConstants.ts FINANCING_SEASONS.
@@ -147,7 +154,7 @@ function FinancingDecisionModal({ request, onClose }) {
   // pageSize is capped at 100 by the listQuery validator.
   const { data: partners } = useQuery({
     queryKey: ['admin-partners-list'],
-    queryFn: () => api.list('/admin/partners', { params: { status: 'active', pageSize: 100 } }),
+    queryFn: () => api.list('/admin/partners', { params: { status: statusFilter('user_status', 'active'), pageSize: 100 } }),
   });
   const partnerOptions = partners?.data || [];
 

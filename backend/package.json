@@ -9,7 +9,7 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "lint": "eslint src/",
-    "test": "node scripts/verify-fixes.js && node scripts/verify-scoring.js && node scripts/verify-consent.js && node scripts/verify-report.js && node scripts/verify-farms.js && node scripts/verify-partial-update.js && node scripts/verify-errors.js && node scripts/verify-idempotency.js && node scripts/verify-satellite.js",
+    "test": "node scripts/verify-fixes.js && node scripts/verify-scoring.js && node scripts/verify-consent.js && node scripts/verify-report.js && node scripts/verify-farms.js && node scripts/verify-partial-update.js && node scripts/verify-errors.js && node scripts/verify-idempotency.js && node scripts/verify-satellite.js && node scripts/verify-enums.js",
     "check:docs": "node scripts/check-swagger.js",
     "gen:docs": "node scripts/gen-swagger-stubs.js --write",
     "diagnose:email": "node scripts/diagnose-email.js",

@@ -78,7 +78,7 @@ router.get('/farmers/:farmerId/market-access', requireParamUuid('farmerId'), asy
 router.get('/farmers/:farmerId/field-notes', requireParamUuid('farmerId'), asyncHandler(fieldNotes.listByFarmer));
 
 // --- Production / Yield (seasonal) ---
-router.get('/productions', validate(v.listQuery, 'query'), asyncHandler(productions.list));
+router.get('/productions', validate(v.listQueries.productions, 'query'), asyncHandler(productions.list));
 router.post('/productions', validate(v.createProduction), asyncHandler(productions.create));
 router.get('/productions/:productionId', requireParamUuid('productionId'), asyncHandler(productions.getById));
 router.patch('/productions/:productionId', requireParamUuid('productionId'), validate(v.updateProduction), asyncHandler(productions.update));
@@ -95,7 +95,7 @@ router.patch('/field-notes/:noteId', requireParamUuid('noteId'), validate(v.upda
 router.delete('/field-notes/:noteId', requireParamUuid('noteId'), asyncHandler(fieldNotes.remove));
 
 // --- Change requests (edits submitted for admin approval) ---
-router.get('/change-requests', validate(v.listQuery, 'query'), asyncHandler(changeRequests.list));
+router.get('/change-requests', validate(v.listQueries.changeRequests, 'query'), asyncHandler(changeRequests.list));
 router.post('/change-requests', validate(v.createChangeRequest), asyncHandler(changeRequests.create));
 router.get('/change-requests/:changeRequestId', requireParamUuid('changeRequestId'), asyncHandler(changeRequests.getById));
 
@@ -105,7 +105,7 @@ router.post('/deliveries', validate(v.createDelivery), asyncHandler(deliveries.c
 router.get('/deliveries/:deliveryId', requireParamUuid('deliveryId'), asyncHandler(deliveries.getById));
 
 // --- Financing ---
-router.get('/financing-requests', validate(v.listQuery, 'query'), asyncHandler(financing.list));
+router.get('/financing-requests', validate(v.listQueries.financing, 'query'), asyncHandler(financing.list));
 router.post('/financing-requests', validate(v.createFinancingRequest), asyncHandler(financing.create));
 router.get('/financing-requests/:requestId', requireParamUuid('requestId'), asyncHandler(financing.getById));
 
@@ -118,12 +118,12 @@ router.get('/wallet', asyncHandler(wallet.getWallet));
 router.get('/wallet/transactions', validate(v.listQuery, 'query'), asyncHandler(wallet.listTransactions));
 router.get('/wallet/transactions/:transactionId', requireParamUuid('transactionId'), asyncHandler(wallet.getTransaction));
 router.post('/wallet/settlements', validate(v.createSettlement), asyncHandler(wallet.requestSettlement));
-router.get('/wallet/settlements', validate(v.listQuery, 'query'), asyncHandler(wallet.listSettlements));
+router.get('/wallet/settlements', validate(v.listQueries.settlements, 'query'), asyncHandler(wallet.listSettlements));
 // Manual cash-purchase proof. These two handlers were implemented, exported and
 // documented, but never registered — which left the admin side of the flow
 // (GET /admin/cash-purchases and POST /admin/cash-purchases/:id/confirm) with
 // nothing to list or confirm.
-router.get('/wallet/cash-purchases', validate(v.listQuery, 'query'), asyncHandler(wallet.listCashPurchases));
+router.get('/wallet/cash-purchases', validate(v.listQueries.transactions, 'query'), asyncHandler(wallet.listCashPurchases));
 router.post('/wallet/cash-purchases', validate(v.recordCashPurchase), asyncHandler(wallet.recordCashPurchase));
 
 // --- Notifications ---

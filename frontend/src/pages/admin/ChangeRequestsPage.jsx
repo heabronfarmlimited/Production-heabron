@@ -10,6 +10,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Field, Textarea } from '@/components/ui/Input';
 import { DataTable, Pagination } from '@/components/ui/DataTable';
 import { formatDateTime, humanize } from '@/lib/utils';
+import { statusTabs } from '@/lib/statuses';
 
 /**
  * Agent change requests.
@@ -25,6 +26,14 @@ import { formatDateTime, humanize } from '@/lib/utils';
  * and stop using it, which is how a farmer's wrong phone number or farm size
  * stays wrong — and farm size is the denominator of the production score.
  */
+/** The `change_request_status` labels, with the words an admin reads. */
+const TABS = statusTabs('change_request_status', [
+  ['pending', 'Pending'],
+  ['approved', 'Approved'],
+  ['rejected', 'Rejected'],
+  ['', 'All'],
+]);
+
 export default function ChangeRequestsPage() {
   const [status, setStatus] = useState('pending');
   const [page, setPage] = useState(1);
@@ -130,12 +139,7 @@ export default function ChangeRequestsPage() {
       />
 
       <div className="flex items-center gap-2 mb-4">
-        {[
-          ['pending', 'Pending'],
-          ['approved', 'Approved'],
-          ['rejected', 'Rejected'],
-          ['', 'All'],
-        ].map(([value, label]) => (
+        {TABS.map(([value, label]) => (
           <button
             type="button"
             key={value || 'all'}

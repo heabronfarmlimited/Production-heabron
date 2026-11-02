@@ -17,6 +17,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Field, Textarea } from '@/components/ui/Input';
 import { DataTable, Pagination } from '@/components/ui/DataTable';
 import { formatDateTime, initials } from '@/lib/utils';
+import { statusTabs } from '@/lib/statuses';
 
 /**
  * Data consent register.
@@ -37,6 +38,15 @@ import { formatDateTime, initials } from '@/lib/utils';
  * status only — never the evidence — and the detail endpoint mints 5-minute
  * signed URLs per request rather than storing public ones.
  */
+/** The `consent_status` labels, with the words an admin reads. */
+const CONSENT_STATUSES = statusTabs('consent_status', [
+  ['pending_verification', 'Pending verification'],
+  ['active', 'Active'],
+  ['withdrawn', 'Withdrawn'],
+  ['superseded', 'Superseded'],
+  ['', 'All'],
+]);
+
 export default function ConsentPage() {
   const [status, setStatus] = useState('pending_verification');
   const [entityType, setEntityType] = useState('');
@@ -142,13 +152,7 @@ export default function ConsentPage() {
     },
   ];
 
-  const STATUSES = [
-    ['pending_verification', 'Pending verification'],
-    ['active', 'Active'],
-    ['withdrawn', 'Withdrawn'],
-    ['superseded', 'Superseded'],
-    ['', 'All'],
-  ];
+  const STATUSES = CONSENT_STATUSES;
 
   return (
     <>

@@ -19,14 +19,14 @@
       },
       "env": {
         "USE_STAGING": "false",
-        "PRODUCTION_BASE_URL": "https://heabroncoopscore.com/api"
+        "PRODUCTION_BASE_URL": "https://api.heabroncoopscore.com/api"
       }
     },
     "preview-staging": {
       "extends": "preview",
       "env": {
         "USE_STAGING": "true",
-        "STAGING_BASE_URL": "https://heabroncoopscore.com/api"
+        "STAGING_BASE_URL": "https://api.heabroncoopscore.com/api"
       }
     },
     "production": {
@@ -38,7 +38,7 @@
       },
       "env": {
         "USE_STAGING": "false",
-        "PRODUCTION_BASE_URL": "https://heabroncoopscore.com/api"
+        "PRODUCTION_BASE_URL": "https://api.heabroncoopscore.com/api"
       }
     }
   },

@@ -56,6 +56,15 @@ const config: ExpoConfig = {
   name: 'Heabron',
   slug: 'heabron-mobile',
   version: '1.0.0',
+  /**
+   * The Expo account that owns the EAS project.
+   *
+   * Written here rather than left to whoever is logged in: without it, a
+   * second person running `eas build` from their own account creates a
+   * SEPARATE project with its own keystore, and the APKs it produces will
+   * not install over the ones already on testers' phones.
+   */
+  owner: 'dammy-v',
   orientation: 'portrait', // main.dart locks portraitUp + portraitDown
   icon: './src/assets/images/app_icon.png',
   scheme: 'heabron',
@@ -152,6 +161,21 @@ const config: ExpoConfig = {
     stagingBaseUrl: process.env.STAGING_BASE_URL,
     productionBaseUrl: process.env.PRODUCTION_BASE_URL,
     useStaging: process.env.USE_STAGING !== 'false',
+
+    /**
+     * The EAS project, from `eas init`.
+     *
+     * `eas init` writes this itself into a static app.json, but this config
+     * is TypeScript — it cannot edit code — so it prints the value and stops
+     * with "Cannot automatically write to dynamic config". Pasting it here is
+     * the documented completion of that step, not a workaround.
+     *
+     * Not a secret: it identifies the project, it does not grant access to
+     * it. Builds are authorised by the account you log in with.
+     */
+    eas: {
+      projectId: '730a4e60-40b3-4e69-b841-d44fd9c54e62',
+    },
   },
 };
 

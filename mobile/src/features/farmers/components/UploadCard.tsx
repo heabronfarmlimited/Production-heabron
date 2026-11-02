@@ -12,8 +12,9 @@
  * `errorBuilder` falling back to a broken-image icon; `previewUri` covers both
  * a freshly picked local file and a stored remote URL.
  */
+import { Image } from 'expo-image';
 import { useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { AppLoading } from '../../../components/AppLoading';
 import { colors } from '../../../core/theme/colors';
@@ -113,6 +114,20 @@ export interface MultiUploadCardProps {
   title: string;
   /** Uploaded remote URLs. */
   urls: string[];
+  /**
+   * How many the flow asks for, and the hard ceiling.
+   *
+   * `recommended` is a target, not a gate: the card says how many more are
+   * wanted but the form still saves below it. An agent on a weak connection
+   * who gets six photos up must not be blocked from recording the farmer at
+   * all — the flow's own exception list treats a stalled upload as something
+   * to recover from, not a reason to lose the record.
+   *
+   * `max` IS enforced, because the server rejects more than it allows and a
+   * 422 after ten uploads is a bad way to learn that.
+   */
+  recommended?: number;
+  max?: number;
   /** Local previews still uploading. */
   pendingUris?: string[];
   uploading?: boolean;
@@ -126,6 +141,8 @@ export function MultiUploadCard({
   urls,
   pendingUris = [],
   uploading = false,
+  recommended,
+  max,
   onPress,
   onRemove,
   testID,
@@ -133,10 +150,18 @@ export function MultiUploadCard({
   const previews = [...urls, ...pendingUris];
   const count = previews.length;
   const hasValue = count > 0;
+  const atMax = max != null && count >= max;
+  const shortBy = recommended != null ? Math.max(0, recommended - count) : 0;
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>{title}</Text>
+
+      {recommended != null && shortBy > 0 ? (
+        <Text style={styles.guidance}>
+          {`${recommended} recommended — ${shortBy} more to go. You can still save with fewer.`}
+        </Text>
+      ) : null}
 
       <View style={{ height: h(8) }} />
 
@@ -144,7 +169,7 @@ export function MultiUploadCard({
         testID={testID}
         accessibilityRole="button"
         accessibilityLabel={title}
-        onPress={onPress}
+        onPress={atMax ? undefined : onPress}
         style={[styles.card, styles.cardColumn, hasValue ? styles.cardFilled : styles.cardIdle]}
       >
         <View style={styles.cardRow}>
@@ -152,7 +177,9 @@ export function MultiUploadCard({
             {hasValue ? '✓' : '➕'}
           </Text>
           <Text style={[styles.cardLabel, hasValue ? styles.filledText : styles.idleText]}>
-            {hasValue ? `${count} photos added` : 'Tap to add photos'}
+            {hasValue
+              ? `${count} photo${count === 1 ? '' : 's'} added${atMax ? ' (maximum)' : ''}`
+              : 'Tap to add photos'}
           </Text>
           {uploading ? <AppLoading color={colors.primary} /> : null}
         </View>
@@ -260,7 +287,11 @@ function Thumbnail({ uri, size }: { uri: string; size: number }) {
     <Image
       source={{ uri }}
       style={box}
-      resizeMode="cover"
+      contentFit="cover"
+      // Thumbnails are re-rendered on every keystroke in the form around
+      // them; caching stops each one re-decoding.
+      cachePolicy="memory-disk"
+      transition={150}
       onError={() => setFailed(true)}
       accessible={false}
     />
@@ -268,6 +299,14 @@ function Thumbnail({ uri, size }: { uri: string; size: number }) {
 }
 
 const styles = StyleSheet.create({
+  /** The target, stated without making it a requirement. */
+  guidance: {
+    ...textTheme.bodySmall,
+    fontSize: spMin(11),
+    color: colors.secondaryTextColor,
+    lineHeight: spMin(15),
+    marginTop: h(2),
+  },
   container: {
     alignSelf: 'stretch',
   },

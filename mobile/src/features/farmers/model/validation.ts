@@ -86,11 +86,29 @@ export const farmerFormSchema = z
     lga: z.string().min(1, 'Please select state and lga'),
 
     // -- Farm Profile ---------------------------------------------------
+    /**
+     * The agent's name for this plot ("Cassava plot"). Optional: an unnamed
+     * farm is numbered by position ("Farm 1"). It earns its place on the
+     * onboarding form too — a farmer who will have several plots is easier
+     * to keep straight if the first one is named when it is recorded.
+     */
+    farmLabel: z.string().trim().max(80, 'Farm name must be at most 80 characters'),
+    /**
+     * Greater than zero, not just non-negative.
+     *
+     * Land size is the DENOMINATOR of the production score. A 0 made the
+     * farmer permanently unscoreable — the engine's divide-by-zero guard
+     * scored them 0 on production with nothing on screen saying why — and
+     * both this schema and the server validator used to accept it. The user
+     * flow lists "missing farm area" as an exception to handle, and refusing
+     * it at the door is the handling.
+     */
     farmSizeAcres: z
       .string()
       .min(1, REQUIRED)
-      .refine((v) => Number.isFinite(Number(v)) && Number(v) >= 0, {
-        message: 'Enter a valid farm size',
+      .refine((v) => Number.isFinite(Number(v)), { message: 'Enter a valid farm size' })
+      .refine((v) => Number(v) > 0, {
+        message: 'Farm size must be greater than 0 acres — the credit score divides by it',
       }),
     cropType: z.string().min(1, 'Please select a primary crop'),
     secondaryCrops: z
@@ -175,6 +193,7 @@ export const emptyFarmerForm: FarmerForm = {
   address: '',
   state: '',
   lga: '',
+  farmLabel: '',
   farmSizeAcres: '',
   cropType: '',
   secondaryCrops: [],
@@ -187,6 +206,54 @@ export const emptyFarmerForm: FarmerForm = {
   gpsLng: '',
   landDocumentType: '',
 };
+
+/**
+ * The standalone "Add / Edit Farm" form (v2 "Add Another Farm").
+ *
+ * The form TYPE stays `FarmerForm`, which is what lets the screen reuse
+ * `FarmProfileSection` exactly as onboarding and edit use it — no changes to
+ * a component that already works, and no `Control<...>` casts. The personal
+ * fields sit in the form state unused and blank, and are never submitted;
+ * only the farm keys are read back out.
+ *
+ * So the schema is `farmerFormSchema` with the personal rules relaxed rather
+ * than a farm-only schema: same keys, same farm rules (a rule added to
+ * onboarding applies here automatically), and an output type the resolver
+ * accepts. The GPS pair-or-neither rule is re-applied because `.extend()`
+ * returns the inner object, dropping the `superRefine` it was attached to.
+ */
+const RELAXED_PERSONAL_FIELDS = {
+  fullName: z.string(),
+  dateOfBirth: z.string(),
+  gender: z.string(),
+  phone: z.string(),
+  nin: z.string(),
+  bvn: z.string(),
+  educationLevel: z.string(),
+  householdSize: z.string(),
+  dependents: z.string(),
+  address: z.string(),
+  state: z.string(),
+  lga: z.string(),
+} as const;
+
+export const farmFormSchema = farmerFormSchema
+  .innerType()
+  .extend(RELAXED_PERSONAL_FIELDS)
+  .superRefine((value, ctx) => {
+    const hasLat = value.gpsLat.trim().length > 0;
+    const hasLng = value.gpsLng.trim().length > 0;
+    if (hasLat !== hasLng) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [hasLat ? 'gpsLng' : 'gpsLat'],
+        message: 'Enter both latitude and longitude',
+      });
+    }
+  });
+
+/** Blank values for "Add Another Farm" — the farmer half stays empty. */
+export const emptyFarmForm: FarmerForm = { ...emptyFarmerForm };
 
 // ------------------------------------------------------------ record yield
 export const productionFormSchema = z.object({

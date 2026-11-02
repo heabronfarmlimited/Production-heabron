@@ -11,7 +11,17 @@ import { Card, MetricCard, TierPill, Skeleton, StatusPill } from '@/components/u
 import { Button } from '@/components/ui/Button';
 import { FarmMap } from '@/components/ui/FarmMap';
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip } from 'recharts';
-import { formatNaira, formatDate, formatNumber, formatScore, initials, sumAmounts } from '@/lib/utils';
+import {
+  farmList,
+  farmerLandAcres,
+  formatNaira,
+  formatDate,
+  formatNumber,
+  formatScore,
+  initials,
+  primaryFarm,
+  sumAmounts,
+} from '@/lib/utils';
 
 const TONNE_KG = 1000;
 
@@ -87,7 +97,10 @@ export default function PartnerCreditReportPage({ type }) {
  * =========================================================================== */
 export function FarmerProfile({ report, onBack, extraActions, backLabel = 'All farmers' }) {
   const f = report?.subject || {};
-  const farm = Array.isArray(f.farm_profiles) ? f.farm_profiles[0] : f.farm_profiles;
+  // The primary farm, for the single-farm fields; acreage is summed below.
+  const farm = primaryFarm(f);
+  const landAcres = farmerLandAcres(f);
+  const farms = farmList(f);
   const score = report?.score || {};
   const tier = score.credit_tier;
 
@@ -182,7 +195,19 @@ export function FarmerProfile({ report, onBack, extraActions, backLabel = 'All f
           <Card>
             <h3 className="font-semibold text-ink mb-3 flex items-center gap-2"><Sprout className="size-4 text-forest-500" /> Farm details</h3>
             <dl className="text-sm divide-y divide-whisper/50">
-              <Row label="Total acreage" value={farm?.farm_size_acres ? `${formatScore(farm.farm_size_acres, 2)} acres` : '—'} />
+              {/*
+                Summed across every farm. This was one plot's acreage, which
+                contradicted the production score printed beside it — the
+                score divides by the farmer's whole land.
+              */}
+              <Row
+                label="Total acreage"
+                value={
+                  landAcres != null
+                    ? `${formatScore(landAcres, 2)} acres${farms.length > 1 ? ` across ${farms.length} farms` : ''}`
+                    : '—'
+                }
+              />
               <Row label="Primary crop" value={cap(farm?.crop_type) || cap(f.cooperatives?.primary_crop)} />
               <Row label="Secondary crops" value={(farm?.secondary_crops || []).map(cap).join(', ') || '—'} />
               <Row label="GPS mapped" value={<VerifyMark ok={!!farm?.gps_mapped} label="Mapped" />} />
@@ -195,13 +220,27 @@ export function FarmerProfile({ report, onBack, extraActions, backLabel = 'All f
               <Row label="Water source" value={WATER_LABELS[farm?.water_source] || cap(farm?.water_source)} />
             </dl>
             <div className="mt-4 rounded-xl overflow-hidden border border-whisper bg-bone/60">
+              {/*
+                Three states, not two. Exact farm coordinates are withheld
+                from partner-facing responses — a farm boundary is as
+                identifying as a home address, and the consent a farmer gives
+                covers their data being used for scoring, not their land being
+                locatable by anyone with a partner login.
+
+                So a mapped farm with no coordinates must NOT fall through to
+                "not yet GPS-mapped": that would tell a lender the boundary
+                was never walked when it was, and the mapped status is part of
+                what the verification score is built on.
+              */}
               {farm?.gps_lat && farm?.gps_lng ? (
                 <FarmMap lat={Number(farm.gps_lat)} lng={Number(farm.gps_lng)} label={[f.lga, f.state].filter(Boolean).join(', ')} />
               ) : (
                 <div className="h-[140px] grid place-items-center text-center">
                   <div className="text-smoke text-xs">
                     <MapPin className="size-5 mx-auto mb-1 text-forest-400" />
-                    Farm not yet GPS-mapped
+                    {farm?.gps_mapped
+                      ? 'Boundary walked and verified — exact location withheld'
+                      : 'Farm not yet GPS-mapped'}
                     {f.lga && <div>{[f.lga, f.state].filter(Boolean).join(', ')}</div>}
                   </div>
                 </div>
@@ -693,7 +732,7 @@ function CooperativeReport({ report, onBack }) {
             <tbody>
               {members.slice(0, 100).map((m) => {
                 const s = Array.isArray(m.credit_scores) ? m.credit_scores[0] : m.credit_scores;
-                const farm = Array.isArray(m.farm_profiles) ? m.farm_profiles[0] : m.farm_profiles;
+                const memberAcres = farmerLandAcres(m);
                 return (
                   <tr
                     key={m.id}
@@ -716,8 +755,8 @@ function CooperativeReport({ report, onBack }) {
                         </div>
                       </div>
                     </td>
-                    <td className="py-2.5 px-3 capitalize">{farm?.crop_type || '—'}</td>
-                    <td className="py-2.5 px-3">{farm?.farm_size_acres ? `${formatScore(farm.farm_size_acres, 2)} ac` : '—'}</td>
+                    <td className="py-2.5 px-3 capitalize">{primaryFarm(m)?.crop_type || '—'}</td>
+                    <td className="py-2.5 px-3">{memberAcres != null ? `${formatScore(memberAcres, 2)} ac` : '—'}</td>
                     <td className="py-2.5 px-3"><StatusPill status={m.nin_verification_status || 'pending'} /></td>
                     <td className="py-2.5 px-3"><TierPill tier={s?.credit_tier} /></td>
                     <td className="py-2.5 px-3 tabular font-semibold">{formatScore(s?.final_credit_score, 0)}</td>

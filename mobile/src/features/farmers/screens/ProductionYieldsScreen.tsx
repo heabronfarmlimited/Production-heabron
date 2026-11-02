@@ -20,6 +20,7 @@ import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 import { AppButton } from '../../../components/AppButton';
 import { AppLoading } from '../../../components/AppLoading';
 import { AppSkeleton } from '../../../components/AppSkeleton';
+import { SkeletonList } from '../../../components/Skeleton';
 import { colors } from '../../../core/theme/colors';
 import { h, r, spMin } from '../../../core/theme/responsive';
 import { fontWeights, textTheme } from '../../../core/theme/typography';
@@ -46,7 +47,7 @@ export function ProductionYieldsScreen(props: ProductionYieldsScreenProps = {}) 
   return (
     <AppSkeleton
       appBarTitle="Production Yields"
-      isBusy={isLoading && items.length === 0}
+      firstLoad={isLoading && items.length === 0 ? <SkeletonList /> : null}
       bottomBar={
         <View style={styles.bottomBar}>
           <AppButton

@@ -13,11 +13,11 @@
  * `maximumZoomScale={4}` / `minimumZoomScale={0.5}` — pinch-to-zoom on iOS, and
  * the full-width contained image on Android. Noted as a deviation.
  */
+import { Image } from 'expo-image';
 import { useState } from 'react';
 import {
   Dimensions,
   FlatList,
-  Image,
   Modal,
   Pressable,
   ScrollView,
@@ -85,7 +85,7 @@ export function ImageGalleryDialog({
                   onPress={() => setFullscreenIndex(index)}
                   style={styles.thumbWrap}
                 >
-                  <GalleryImage uri={item} style={styles.thumb} resizeMode="cover" />
+                  <GalleryImage uri={item} style={styles.thumb} contentFit="cover" />
                 </Pressable>
               )}
             />
@@ -162,7 +162,7 @@ export function FullscreenImagePager({
               showsVerticalScrollIndicator={false}
               showsHorizontalScrollIndicator={false}
             >
-              <GalleryImage uri={item} style={{ width }} resizeMode="contain" fill />
+              <GalleryImage uri={item} style={{ width }} contentFit="contain" fill />
             </ScrollView>
           )}
         />
@@ -175,12 +175,13 @@ export function FullscreenImagePager({
 function GalleryImage({
   uri,
   style,
-  resizeMode,
+  contentFit,
   fill = false,
 }: {
   uri: string;
   style: object;
-  resizeMode: 'cover' | 'contain';
+  /** `expo-image`'s name for what React Native called `resizeMode`. */
+  contentFit: 'cover' | 'contain';
   fill?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
@@ -199,7 +200,13 @@ function GalleryImage({
     <Image
       source={{ uri }}
       style={[style, fill && styles.imageFill]}
-      resizeMode={resizeMode}
+      contentFit={contentFit}
+      // Farm photos are the heaviest images in the app and this gallery is
+      // where an agent flips back and forth between them. Cached on disk, so
+      // the second look costs nothing and a revisit after a restart costs
+      // nothing either.
+      cachePolicy="memory-disk"
+      transition={180}
       onError={() => setFailed(true)}
       accessible={false}
     />

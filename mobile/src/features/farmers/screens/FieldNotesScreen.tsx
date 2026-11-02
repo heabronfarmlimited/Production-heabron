@@ -23,6 +23,7 @@ import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 import { AppButton } from '../../../components/AppButton';
 import { AppSkeleton } from '../../../components/AppSkeleton';
 import { ConfirmSheet } from '../../../components/ConfirmSheet';
+import { SkeletonList } from '../../../components/Skeleton';
 import { colors } from '../../../core/theme/colors';
 import { h, r, spMin } from '../../../core/theme/responsive';
 import { fontWeights, textTheme } from '../../../core/theme/typography';
@@ -52,7 +53,7 @@ export function FieldNotesScreen(props: FieldNotesScreenProps = {}) {
     <>
       <AppSkeleton
         appBarTitle="Field Notes"
-        isBusy={isLoading && notes.length === 0}
+        firstLoad={isLoading && notes.length === 0 ? <SkeletonList /> : null}
         bottomBar={
           <View style={styles.bottomBar}>
             <AppButton

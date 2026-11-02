@@ -22,9 +22,10 @@
  *  - Two new actions: manual NIN re-verify and 'Capture farm boundary', which
  *    existed in the repository layer with no UI.
  */
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AppLoading } from '../../../components/AppLoading';
 import { AppSkeleton } from '../../../components/AppSkeleton';
@@ -43,7 +44,13 @@ import { DetailSectionHeader } from '../components/SectionTitle';
 import { useFarmerExport } from '../hooks/useFarmerExport';
 import { useDeleteFarmer, useVerifyFarmerNin } from '../hooks/useFarmerMutations';
 import { useFarmer, useFarmerCreditScore } from '../hooks/useFarmers';
-import { resolveCrops, resolveFarm, resolveFullAddress } from '../model/farmer';
+import {
+  resolveCrops,
+  resolveFarm,
+  resolveFarms,
+  resolveFullAddress,
+  resolveLandAcres,
+} from '../model/farmer';
 import { farmersRoutes } from '../navigation';
 
 import { useRouteParams } from './routeParams';
@@ -104,6 +111,9 @@ export function FarmerDetailsScreen(props: FarmerDetailsScreenProps = {}) {
   }
 
   const farm = resolveFarm(farmer);
+  // Totals across every farm, not the main farm's own acreage.
+  const landAcres = resolveLandAcres(farmer);
+  const farmCount = farmer.land?.farmCount ?? resolveFarms(farmer).length;
   const crops = resolveCrops(farmer);
   const fullAddress = resolveFullAddress(farmer);
   const creditScore = farmer.creditScore ?? 0;
@@ -152,7 +162,9 @@ export function FarmerDetailsScreen(props: FarmerDetailsScreenProps = {}) {
               <Image
                 source={{ uri: farmer.farmerPhotoUrl }}
                 style={styles.avatarImage}
-                resizeMode="cover"
+                contentFit="cover"
+                cachePolicy="memory-disk"
+                transition={180}
                 accessible={false}
               />
             ) : (
@@ -252,15 +264,41 @@ export function FarmerDetailsScreen(props: FarmerDetailsScreenProps = {}) {
         <View style={{ height: h(24) }} />
 
         {/* ------------------------------------------- farm information */}
-        <DetailSectionHeader title="Farm information" />
+        {/*
+          The rows below the land total describe the MAIN farm. With several
+          plots on file they would otherwise read as the farmer's only soil
+          type and water source, which is why the farms screen exists.
+        */}
+        <DetailSectionHeader
+          title={farmCount > 1 ? 'Farm information (main farm)' : 'Farm information'}
+        />
         <InfoCard>
           <DetailRow
             label="Cooperative"
             value={text(farmer.cooperative?.name, true)}
           />
+          {/*
+            v2: a farmer may hold several plots, so this is the TOTAL across
+            their farms — the figure the production score divides by and the
+            one on the lender's report. The single farm's own size is on the
+            farms screen, where each plot is listed.
+          */}
           <DetailRow
-            label="Farm Size"
-            value={farm?.farmSizeAcres != null ? `${farm.farmSizeAcres} acres` : NA}
+            label="Total Land"
+            value={landAcres != null ? `${landAcres} acres` : NA}
+          />
+          <DetailRow
+            label={farmCount === 1 ? 'Farm' : 'Farms'}
+            value={
+              farmCount === 0
+                ? 'None recorded'
+                : farmCount === 1
+                  ? 'View farm'
+                  : `${farmCount} farms`
+            }
+            valueColor={colors.primary}
+            onPress={() => router.push(farmersRoutes.farms(farmer.id))}
+            testID="farmer-open-farms"
           />
           <DetailRow label="Soil Type" value={text(farm?.soilType, true)} />
           <DetailRow label="Land Ownership" value={text(farm?.landOwnership, true)} />
@@ -283,16 +321,28 @@ export function FarmerDetailsScreen(props: FarmerDetailsScreenProps = {}) {
                 : NA
             }
           />
-          {/* NEW — mapped boundary, now that the polygon can be captured. */}
+          {/*
+            v2: a mapped boundary opens the full-screen map, where the shape
+            can actually be looked at; an unmapped one goes straight to
+            walking it. Sending a mapped farm to the capture screen — which
+            the old row did — invited an agent to re-walk a boundary they
+            only wanted to check.
+          */}
           <DetailRow
             label="Boundary Points"
             value={
               farm && farm.gpsPolygon.length > 0
-                ? `${farm.gpsPolygon.length} points`
+                ? `${farm.gpsPolygon.length} points — view map`
                 : 'Not mapped'
             }
             valueColor={colors.primary}
-            onPress={() => router.push(farmersRoutes.captureBoundary(farmer.id))}
+            onPress={() =>
+              router.push(
+                farm && farm.gpsPolygon.length > 0
+                  ? farmersRoutes.map(farmer.id)
+                  : farmersRoutes.captureBoundary(farmer.id),
+              )
+            }
             testID="farmer-open-boundary"
           />
           <DetailRow
@@ -357,6 +407,30 @@ export function FarmerDetailsScreen(props: FarmerDetailsScreenProps = {}) {
         title="Farmer actions"
         subtitle="Choose an action to manage this farmer."
       >
+        {/*
+          v2: the hub is FIRST because recording against a farmer is what an
+          agent opens this sheet to do. Reading and exporting come after.
+        */}
+        <OptionsRow
+          icon={<Text style={styles.rowGlyph}>＋</Text>}
+          label="Update Record"
+          subtitle="Yield, delivery, repayment, market access or a note"
+          onPress={() => {
+            setSheetOpen(false);
+            router.push(farmersRoutes.updateRecord(farmer.id));
+          }}
+          testID="farmer-update-record"
+        />
+        <OptionsRow
+          icon={<Text style={styles.rowGlyph}>🗺</Text>}
+          label={farmCount > 1 ? `Farms (${farmCount})` : 'Farms'}
+          subtitle="Add another farm, or map one's boundary"
+          onPress={() => {
+            setSheetOpen(false);
+            router.push(farmersRoutes.farms(farmer.id));
+          }}
+          testID="farmer-farms"
+        />
         <OptionsRow
           icon={<Text style={styles.rowGlyph}>↗</Text>}
           label="Export Data"

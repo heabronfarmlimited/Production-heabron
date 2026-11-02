@@ -49,6 +49,13 @@ export const qk = {
   farmers: (filters?: object) => ['farmers', filters ?? {}] as const,
   farmer: (id: string) => ['farmer', id] as const,
   farmerCreditScore: (id: string) => ['farmer', id, 'credit-score'] as const,
+  /**
+   * The farmer's farms. Nested under the farmer key so invalidating
+   * `qk.farmer(id)` does NOT clear it on its own — the farm mutations
+   * invalidate both explicitly, and the detail screen's own refetch should
+   * not discard a loaded farm list.
+   */
+  farmerFarms: (id: string) => ['farmer', id, 'farms'] as const,
   farmerSeasonalYield: (id: string) => ['farmer', id, 'seasonal-yield'] as const,
   farmerMarketAccess: (id: string) => ['farmer', id, 'market-access'] as const,
   farmerFieldNotes: (id: string) => ['farmer', id, 'field-notes'] as const,

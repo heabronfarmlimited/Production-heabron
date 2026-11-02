@@ -7,9 +7,10 @@
  * footer with 'Discard' (outlined) and 'Save changes'.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { Controller, useForm } from 'react-hook-form';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AppButton } from '../../../components/AppButton';
 import { AppLoading } from '../../../components/AppLoading';

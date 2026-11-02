@@ -18,6 +18,7 @@ import { RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { AppLoading } from '../../../components/AppLoading';
 import { AppSkeleton } from '../../../components/AppSkeleton';
 import { AuthBackButton } from '../../../components/BaseAppBar';
+import { SkeletonList } from '../../../components/Skeleton';
 import { routes } from '../../../core/navigation/routes';
 import { colors } from '../../../core/theme/colors';
 import { h, r, spMin } from '../../../core/theme/responsive';
@@ -45,7 +46,7 @@ export function TransactionHistoryScreen() {
   };
 
   return (
-    <AppSkeleton isBusy={isLoading && items.length === 0}>
+    <AppSkeleton firstLoad={isLoading && items.length === 0 ? <SkeletonList /> : null}>
       <View style={styles.backRow}>
         <AuthBackButton />
       </View>

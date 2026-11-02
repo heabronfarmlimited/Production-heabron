@@ -14,8 +14,9 @@
  * all three, so `formKey.currentState.validate()` validated whichever widgets
  * happened to be mounted).
  */
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AppSkeleton } from '../../../components/AppSkeleton';
 import { AuthBackButton } from '../../../components/BaseAppBar';
@@ -49,7 +50,7 @@ export function RegisterScreen() {
 
   return (
     <AppSkeleton bodyPadding={styles.noPadding} scrollable>
-      <Image source={images.appBarBg} style={styles.headerImage} resizeMode="cover" />
+      <Image source={images.appBarBg} style={styles.headerImage} contentFit="cover" />
 
       <View style={styles.backButton}>
         <AuthBackButton onPress={handleBack} />

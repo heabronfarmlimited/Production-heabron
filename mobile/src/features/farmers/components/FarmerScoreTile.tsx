@@ -12,8 +12,9 @@
  * profile. It also fed `NetworkImage('')` to `AppImage` when there was no
  * photo; an avatar placeholder is rendered instead.
  */
+import { Image } from 'expo-image';
 import { useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors } from '../../../core/theme/colors';
 import { r, spMin } from '../../../core/theme/responsive';
@@ -55,7 +56,11 @@ export function FarmerScoreTile({ farmer, onPress, testID }: FarmerScoreTileProp
             <Image
               source={{ uri: farmer.farmerPhotoUrl ?? '' }}
               style={styles.avatarImage}
-              resizeMode="cover"
+              contentFit="cover"
+              // This tile renders per farmer in a list; without a disk cache
+              // scrolling back up re-downloaded every face.
+              cachePolicy="memory-disk"
+              transition={180}
               onError={() => setPhotoFailed(true)}
               accessible={false}
             />

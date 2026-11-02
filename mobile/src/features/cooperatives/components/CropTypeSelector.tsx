@@ -35,6 +35,12 @@ export interface CropTypeSelectorProps {
   onChange: (crops: string[]) => void;
   /** Dart label. */
   title?: string;
+  /**
+   * Crops to leave out of the choices — the cooperative's primary crop.
+   * Secondaries cannot repeat it (v2 flow), and the server rejects a body
+   * that does, so offering it here would only produce a 422.
+   */
+  exclude?: readonly string[];
   error?: string;
   enabled?: boolean;
 }
@@ -43,11 +49,16 @@ export function CropTypeSelector({
   value,
   onChange,
   title = 'Crop type',
+  exclude = [],
   error,
   enabled = true,
 }: CropTypeSelectorProps) {
   const selected = value;
-  const available = CROPS.filter((crop) => !selected.includes(crop.value));
+  const excluded = exclude.map((crop) => crop.trim().toLowerCase());
+  const available = CROPS.filter(
+    (crop) =>
+      !selected.includes(crop.value) && !excluded.includes(crop.value.toLowerCase()),
+  );
 
   const toggle = (crop: string) => {
     if (!enabled) return;

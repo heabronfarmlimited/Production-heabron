@@ -23,6 +23,7 @@ import { useBoundaryCapture } from '../../../core/hooks/useLocation';
 import { colors } from '../../../core/theme/colors';
 import { h, r, spMin } from '../../../core/theme/responsive';
 import { fontWeights, textTheme } from '../../../core/theme/typography';
+import { FarmMapView } from '../components/FarmMapView';
 import { useMapFarm } from '../hooks/useFarmerMutations';
 
 import { useRouteParams } from './routeParams';
@@ -75,7 +76,31 @@ export function FarmBoundaryScreen({ farmerId: farmerIdProp }: FarmBoundaryScree
           size is calculated from the shape you capture.
         </Text>
 
-        <View style={{ height: h(20) }} />
+        <View style={{ height: h(16) }} />
+
+        {/*
+          v2: the shape is drawn as it is captured. Before this the screen
+          was a counter — an agent walked a boundary and dropped points with
+          no way to see whether the shape matched the ground, so a corner
+          taken in the wrong order, or a stray point from a GPS jump, was
+          only discovered when the acreage came back wrong. The area and
+          perimeter update live, which is the check that matters.
+        */}
+        <FarmMapView
+          // `useBoundaryCapture` holds expo-location's
+          // `{latitude, longitude}`; the map and the API both take
+          // `{lat, lng}`. Converted here rather than changing the hook,
+          // whose shape the capture logic and the submit path both rely on.
+          polygon={points.map((p) => ({ lat: p.latitude, lng: p.longitude }))}
+          // No imagery while walking: the shape being captured is the point
+          // of this view, and the centre moves with every dropped point, so
+          // each one would fire a separate billable image request.
+          satellite={false}
+          label="Boundary being captured"
+          style={styles.mapPreview}
+        />
+
+        <View style={{ height: h(16) }} />
 
         <View style={styles.counterCard}>
           <Text style={styles.counterValue}>{points.length}</Text>
@@ -201,6 +226,17 @@ export function FarmBoundaryScreen({ farmerId: farmerIdProp }: FarmBoundaryScree
 }
 
 const styles = StyleSheet.create({
+  /**
+   * Tall enough that a long thin plot is still readable, and fixed rather
+   * than flexed: this screen scrolls, and a flexed child inside a ScrollView
+   * collapses to nothing.
+   */
+  mapPreview: {
+    height: h(300),
+    borderRadius: r(12),
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
   intro: {
     ...textTheme.bodyMedium,
     fontSize: spMin(14),

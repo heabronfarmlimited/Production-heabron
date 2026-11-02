@@ -52,9 +52,14 @@ const canonical = (p) =>
 function backendRoutes() {
   const routesDir = path.join(BACKEND_ROOT, 'src', 'routes');
   if (!fs.existsSync(routesDir)) {
-    console.error(`Backend routes not found at ${routesDir}`);
-    console.error('Pass the backend path: node scripts/check-backend-contract.mjs ../backend');
-    process.exit(2);
+    // The mobile app is also shipped on its own, without the backend beside
+    // it. That is not a contract failure — there is simply nothing to check
+    // against — so skip rather than failing `npm run verify` for someone who
+    // unzipped only this folder.
+    console.log('mobile ↔ backend contract: SKIPPED');
+    console.log(`  No backend found at ${routesDir}.`);
+    console.log('  Check against one with: npm run check:contract -- /path/to/backend');
+    process.exit(0);
   }
 
   const byPath = new Map(); // canonical path -> Set(METHOD)
@@ -101,8 +106,12 @@ function appEndpoints() {
   const body = src.slice(open + 1, end);
 
   const map = new Map(); // endpoint key -> canonical path
-  // `key: '/literal/path'`
-  for (const m of body.matchAll(/(\w+)\s*:\s*'([^']+)'/g)) {
+  // `key: '/literal/path'`, anchored to a property position at the start of a
+  // line. Without the anchor this also matched a string inside an arrow
+  // function's PARAMETER list - `(entityType: 'cooperative' | 'farmer')` was
+  // read as an endpoint named `entityType` pointing at `cooperative`, which
+  // then reported as a route the backend does not have.
+  for (const m of body.matchAll(/^\s*(\w+)\s*:\s*'([^']+)'/gm)) {
     map.set(m[1], canonical(m[2]));
   }
   // `key: (args) => `/template/${x}``
@@ -173,8 +182,41 @@ function main() {
   const methodMismatch = [];
   const unused = [];
 
+  /**
+   * Segment-by-segment match, with `{}` a single-segment wildcard on either
+   * side — not string equality.
+   *
+   * Exact matching happened to work here because the app's endpoint helpers
+   * are parameterised wherever the routes are, so both sides normalise to
+   * `{}` in the same places. But it is luck, not a property: an endpoint
+   * written with a literal where the route takes a parameter (a fixed
+   * upload kind, say) would be reported missing while working perfectly.
+   * The same assumption produced three false positives the moment the
+   * dashboards got this check, so it is fixed here too.
+   */
+  const matchesPath = (callPath, routePath) => {
+    const a = callPath.split('/');
+    const b = routePath.split('/');
+    return (
+      a.length === b.length &&
+      a.every((seg, i) => seg === b[i] || seg === '{}' || b[i] === '{}')
+    );
+  };
+
+  /** Methods served by any route this path could resolve to. */
+  const methodsFor = (callPath) => {
+    const found = new Set();
+    let matched = false;
+    for (const [routePath, methods] of backend) {
+      if (!matchesPath(callPath, routePath)) continue;
+      matched = true;
+      for (const m of methods) found.add(m);
+    }
+    return matched ? found : null;
+  };
+
   for (const [key, p] of endpoints) {
-    const methods = backend.get(p);
+    const methods = methodsFor(p);
     const used = uses.get(key);
 
     if (!methods) {

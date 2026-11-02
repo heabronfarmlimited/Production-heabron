@@ -14,11 +14,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { qk } from '../../../core/api/queryClient';
-import { showApiError, showError, showSuccess } from '../../../core/utils/toast';
+import { errorMessage, showApiError, showError, showSuccess } from '../../../core/utils/toast';
 import { uploadFile } from '../../auth/api/authApi';
 import { createFarmerFromBody } from '../api/farmersApi';
 import {
   pendingFarmerStore,
+  splitPendingFarmers,
   type PendingFarmer,
 } from '../model/pendingFarmer';
 import type { Raw } from '../model/primitives';
@@ -56,10 +57,18 @@ export async function isOnline(): Promise<boolean> {
 }
 
 export interface OfflineFarmerQueue {
+  /** Everything still queued, waiting and failed together. */
   pending: PendingFarmer[];
+  /** Queued but not yet attempted, or attempted without an error recorded. */
+  waiting: PendingFarmer[];
+  /** The last attempt failed — these need the agent's attention. */
+  failed: PendingFarmer[];
   isSyncing: boolean;
-  /** Uploads the queued images, POSTs each farmer, drops it on success. */
-  syncAll: () => Promise<void>;
+  /**
+   * Uploads the queued images, POSTs each farmer, drops it on success.
+   * Pass an entry id to retry just that one.
+   */
+  syncAll: (only?: string) => Promise<void>;
   /** Re-reads local storage — call after enqueueing from a form. */
   reload: () => void;
   /** Drops one entry without sending it. */
@@ -86,16 +95,25 @@ export function useOfflineFarmerQueue(): OfflineFarmerQueue {
     setPending(pendingFarmerStore.all());
   }, []);
 
-  const syncAll = useCallback(async () => {
+  const syncAll = useCallback(async (only?: string) => {
     // The lock is module-level, not per-instance: several mounted copies see
     // the same reconnect, and a farmer posted twice cannot be undone.
     if (syncInFlight) return;
 
-    const queue = pendingFarmerStore.all();
-    if (queue.length === 0) {
+    const all = pendingFarmerStore.all();
+    // `only` is a single-record retry from the home screen or the queue
+    // list; without it the whole queue is drained.
+    const queue = only ? all.filter((p) => p.id === only) : all;
+    if (all.length === 0) {
       setPending([]);
       return;
     }
+    if (queue.length === 0) return;
+
+    // A retry clears the previous error first, so the entry reads as "in
+    // progress" rather than keeping a stale message that may no longer be
+    // why it is failing.
+    if (only) pendingFarmerStore.clearFailure(only);
 
     if (!(await isOnline())) {
       showError('No internet connection. Sync failed.');
@@ -118,6 +136,12 @@ export function useOfflineFarmerQueue(): OfflineFarmerQueue {
         // One bad record must not block the rest of the queue — the Dart
         // loop rethrew on the first failure and abandoned the remainder.
         failed += 1;
+        // The failure is recorded against the entry, not just toasted. A
+        // record that keeps failing (a duplicate registration number, a
+        // validation error the form let through) used to be
+        // indistinguishable from one merely waiting for a signal, so nobody
+        // knew it needed attention once the toast had gone.
+        pendingFarmerStore.recordFailure(entry.id, errorMessage(err));
         if (failed === 1) showApiError(err, 'Sync failed');
       }
     }
@@ -150,7 +174,9 @@ export function useOfflineFarmerQueue(): OfflineFarmerQueue {
     setPending(pendingFarmerStore.remove(id));
   }, []);
 
-  return { pending, isSyncing, syncAll, reload, discard };
+  const { waiting, failed } = splitPendingFarmers(pending);
+
+  return { pending, waiting, failed, isSyncing, syncAll, reload, discard };
 }
 
 /**

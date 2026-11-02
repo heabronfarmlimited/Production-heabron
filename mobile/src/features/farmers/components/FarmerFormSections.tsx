@@ -71,6 +71,16 @@ export interface FarmerFormSectionProps {
   /** Edit screen packs NIN/BVN, Soil/Years and Water/Irrigation side by side. */
   compact?: boolean;
   enabled?: boolean;
+  /**
+   * State and LGA are inherited from the cooperative when onboarding from
+   * one, so they are shown but not editable (v2 user flow). The farmer's own
+   * home address stays editable — that is their address, not the
+   * cooperative's.
+   *
+   * Separate from `enabled`, which locks the whole section: here the rest of
+   * the personal fields must still be fillable.
+   */
+  stateLgaLocked?: boolean;
 }
 
 /** `initialDate: DateTime(now.year - 18)`, `lastDate: DateTime(now.year - 18)`. */
@@ -90,6 +100,7 @@ export function PersonalInformationSection({
   values,
   compact = false,
   enabled = true,
+  stateLgaLocked = false,
 }: FarmerFormSectionProps) {
   return (
     <View>
@@ -313,7 +324,7 @@ export function PersonalInformationSection({
       <StateLgaDropdown
         state={values.state}
         lga={values.lga}
-        enabled={enabled}
+        enabled={enabled && !stateLgaLocked}
         onStateChange={(next) => setValue('state', next, { shouldValidate: true })}
         onLgaChange={(next) => setValue('lga', next, { shouldValidate: true })}
         stateError={errors.state?.message}
@@ -389,6 +400,31 @@ export function FarmProfileSection({
   return (
     <View>
       <SectionTitle title="Farm Profile" />
+      <Gap />
+
+      {/*
+        v2: a farmer may hold several plots ("Add Another Farm"), so a name
+        makes them tellable apart. Optional — an unnamed farm is numbered by
+        position, which is why there is no error state to satisfy here.
+      */}
+      <Controller
+        control={control}
+        name="farmLabel"
+        render={({ field }) => (
+          <AppTextField
+            title="Farm name (optional)"
+            hintText="e.g. Cassava plot, Behind the river"
+            maxLength={80}
+            enabled={enabled}
+            value={field.value}
+            onChangeText={field.onChange}
+            onBlur={field.onBlur}
+            error={errors.farmLabel?.message}
+            testID="farmer-farm-label"
+          />
+        )}
+      />
+
       <Gap />
 
       <Controller
@@ -763,6 +799,11 @@ export function UploadsSection({
 
       <MultiUploadCard
         title="Farm Photos"
+        // The v2 flow asks for 10–20 per farm. Ten is the target the card
+        // states; twenty is the server's limit, enforced here so an agent
+        // does not discover it as a 422 after uploading.
+        recommended={10}
+        max={20}
         urls={farmPhotos.urls}
         pendingUris={farmPhotos.pending.map((p) => p.uri)}
         uploading={farmPhotos.uploading}

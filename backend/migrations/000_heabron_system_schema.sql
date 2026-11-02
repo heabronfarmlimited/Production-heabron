@@ -120,6 +120,9 @@ ALTER TYPE public.notification_type ADD VALUE IF NOT EXISTS 'yield_rejected';
 -- 010_settlement_rejected_notification.sql for databases already created from
 -- an earlier copy of this file.
 ALTER TYPE public.notification_type ADD VALUE IF NOT EXISTS 'settlement_rejected';
+-- Consent lifecycle (see section 15 below and migration 011).
+ALTER TYPE public.notification_type ADD VALUE IF NOT EXISTS 'consent_pending_verification';
+ALTER TYPE public.notification_type ADD VALUE IF NOT EXISTS 'consent_withdrawn';
 
 -- =============================================================================
 -- 3. CORE TABLES
@@ -215,6 +218,9 @@ CREATE TABLE IF NOT EXISTS public.cooperatives (
   state                TEXT,
   lga                  TEXT,
   address              TEXT,
+  -- DEPRECATED (v2 user flow): no longer collected or returned. The land
+  -- total is derived by summing member farm_profiles.farm_size_acres.
+  -- Retained read-only so historical estimates survive. See migration 012.
   estimated_land_size  NUMERIC(10,2),
   logo_url             TEXT,
   gps_lat              NUMERIC(10,8),
@@ -222,6 +228,8 @@ CREATE TABLE IF NOT EXISTS public.cooperatives (
   gps_polygon          JSONB,
   cooperative_tier     credit_tier,
   average_credit_score NUMERIC(5,2) DEFAULT 0,
+  -- Idempotency key from the mobile app. See migration 013.
+  client_request_id    UUID,
   created_by_agent_id  UUID REFERENCES auth.users(id),
   created_at           TIMESTAMPTZ DEFAULT now(),
   updated_at           TIMESTAMPTZ DEFAULT now()
@@ -256,14 +264,22 @@ CREATE TABLE IF NOT EXISTS public.farmers (
   member_since             DATE,
   credit_score             NUMERIC(5,2) DEFAULT 0,
   credit_tier              credit_tier,
+  -- Idempotency key from the mobile app; a repeat submission returns the
+  -- existing farmer instead of creating a second. See migration 013.
+  client_request_id        UUID,
   created_by_agent_id      UUID REFERENCES auth.users(id),
   created_at               TIMESTAMPTZ DEFAULT now(),
   updated_at               TIMESTAMPTZ DEFAULT now()
 );
 
+-- A farmer may hold SEVERAL farms ("Add Another Farm" in the v2 flow), so
+-- farmer_id is deliberately not unique. `is_primary` picks the one shown on
+-- single-farm screens; land totals always sum every row. See migration 012.
 CREATE TABLE IF NOT EXISTS public.farm_profiles (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   farmer_id           UUID REFERENCES public.farmers(id) ON DELETE CASCADE NOT NULL,
+  farm_label          TEXT,                  -- NULL => API labels by position
+  is_primary          BOOLEAN NOT NULL DEFAULT false,
   farm_size_acres     NUMERIC(10,2),
   -- Farm location / mapping. gps_polygon stores GeoJSON-style coordinate rings
   -- drawn in the mobile app; farm_size_acres can be derived from it server-side.
@@ -629,7 +645,7 @@ CREATE TABLE IF NOT EXISTS public.otp_codes (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email      TEXT NOT NULL,
   code       TEXT NOT NULL,
-  purpose    TEXT NOT NULL CHECK (purpose IN ('signup','password_reset','email_verify')),
+  purpose    TEXT NOT NULL CHECK (purpose IN ('signup','password_reset','email_verify','consent')),
   consumed   BOOLEAN DEFAULT false,
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ DEFAULT now()
@@ -738,6 +754,13 @@ CREATE INDEX IF NOT EXISTS idx_farmers_cooperative_id        ON public.farmers(c
 CREATE INDEX IF NOT EXISTS idx_farmers_created_by_agent_id    ON public.farmers(created_by_agent_id);
 CREATE INDEX IF NOT EXISTS idx_cooperatives_created_by_agent  ON public.cooperatives(created_by_agent_id);
 CREATE INDEX IF NOT EXISTS idx_farm_profiles_farmer           ON public.farm_profiles(farmer_id);
+CREATE INDEX IF NOT EXISTS idx_farm_profiles_farmer_order      ON public.farm_profiles(farmer_id, created_at ASC);
+-- At most one primary farm per farmer; see migration 012.
+-- Duplicate-safe registration: unique among non-null values only, so a
+-- client that sends no key behaves as before. See migration 013.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_farmers_client_request_id      ON public.farmers(client_request_id) WHERE client_request_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cooperatives_client_request_id ON public.cooperatives(client_request_id) WHERE client_request_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_farm_profiles_one_primary ON public.farm_profiles(farmer_id) WHERE is_primary = true;
 CREATE INDEX IF NOT EXISTS idx_seasonal_productions_farmer    ON public.seasonal_productions(farmer_id);
 CREATE INDEX IF NOT EXISTS idx_seasonal_productions_verif     ON public.seasonal_productions(verification_status);
 CREATE INDEX IF NOT EXISTS idx_deliveries_farmer_id           ON public.produce_deliveries(farmer_id);
@@ -1011,6 +1034,7 @@ INSERT INTO storage.buckets (id, name, public) VALUES
   ('farmer-documents',     'farmer-documents',     false),
   ('delivery-proofs',      'delivery-proofs',      false),
   ('transaction-receipts', 'transaction-receipts', false),
+  ('consent-evidence',     'consent-evidence',     false),
   ('partner-logos',        'partner-logos',        true)
 ON CONFLICT (id) DO UPDATE SET public = EXCLUDED.public;
 
@@ -1089,3 +1113,150 @@ UPDATE public.cooperatives c
 -- =============================================================================
 -- END OF MIGRATION
 -- =============================================================================
+
+-- =============================================================================
+-- 15. DATA CONSENT (from 011)
+-- -----------------------------------------------------------------------------
+-- Digital proof of consent collected before any cooperative or farmer data is
+-- captured. See migration 011_data_consent.sql for the full rationale; the
+-- same DDL is inlined here so a fresh database needs only this file.
+--
+-- NOTE: verification uses EMAIL, not the SMS one-time code the specification
+-- describes. There is no SMS provider on this platform and none was agreed.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- Enums
+-- -----------------------------------------------------------------------------
+DO $$ BEGIN
+  CREATE TYPE public.consent_entity_type AS ENUM ('cooperative', 'farmer');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE public.consent_status AS ENUM (
+    'active',
+    'pending_verification',
+    'withdrawn',
+    'superseded'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE public.consent_otp_status AS ENUM ('verified', 'pending', 'failed', 'not_required');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- -----------------------------------------------------------------------------
+-- consent_records
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.consent_records (
+  id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  entity_type            public.consent_entity_type NOT NULL,
+  -- Not a foreign key: a farmer's consent is captured BEFORE the farmer row
+  -- exists (the spec makes consent a gate on submission), so the reference is
+  -- resolved by the application once the record is created.
+  entity_id              UUID,
+
+  agreement_version      TEXT NOT NULL DEFAULT 'v1.0',
+  language               TEXT NOT NULL DEFAULT 'en',
+
+  -- C1..C4 for a cooperative, F1..F3 for a farmer, each true/false.
+  -- Stored as JSONB so a new agreement version can add items without a
+  -- migration, while `agreement_version` records which set applied.
+  item_responses         JSONB NOT NULL,
+
+  -- Denormalised from item_responses so the sharing gate is a cheap indexed
+  -- read rather than a JSON lookup on every partner query.
+  third_party_sharing    BOOLEAN NOT NULL DEFAULT false,
+
+  signer_name            TEXT NOT NULL,
+  signer_role            TEXT,
+  signer_phone           TEXT,
+  signer_email           TEXT,
+
+  -- Second cooperative officer (configurable, default on). Farmer flow unused.
+  second_officer_name    TEXT,
+  second_officer_phone   TEXT,
+  second_officer_email   TEXT,
+
+  -- Storage paths in the private `consent-evidence` bucket.
+  signature_file         TEXT,
+  voice_file             TEXT,
+  -- Set when the signer could not sign and a thumbprint photo was taken.
+  unable_to_sign         BOOLEAN NOT NULL DEFAULT false,
+
+  otp_status             public.consent_otp_status NOT NULL DEFAULT 'pending',
+  otp_verified_at        TIMESTAMPTZ,
+
+  agent_id               UUID REFERENCES auth.users(id),
+
+  -- Both kept: the device clock is what the agent saw, the server clock is
+  -- what can be trusted. They diverge on an offline device.
+  timestamp_device       TIMESTAMPTZ,
+  timestamp_server       TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  gps_latitude           NUMERIC(10, 7),
+  gps_longitude          NUMERIC(10, 7),
+
+  status                 public.consent_status NOT NULL DEFAULT 'pending_verification',
+
+  withdrawal_date        TIMESTAMPTZ,
+  withdrawal_reason      TEXT,
+  withdrawn_by_user_id   UUID REFERENCES auth.users(id),
+
+  -- Chain for the immutability rule: a replacement points at what it replaced.
+  supersedes_id          UUID REFERENCES public.consent_records(id),
+
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_consent_entity
+  ON public.consent_records (entity_type, entity_id);
+
+-- The hot path: "does this entity have a live consent record?"
+CREATE INDEX IF NOT EXISTS idx_consent_active
+  ON public.consent_records (entity_type, entity_id)
+  WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_consent_agent
+  ON public.consent_records (agent_id, created_at DESC);
+
+-- Pending OTP verification, which the admin dashboard lists.
+CREATE INDEX IF NOT EXISTS idx_consent_pending
+  ON public.consent_records (created_at DESC)
+  WHERE status = 'pending_verification';
+
+-- At most one live consent per entity. A replacement must mark the previous
+-- row `superseded` in the same transaction, which is what makes the history
+-- append-only rather than merely conventional.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_consent_one_active
+  ON public.consent_records (entity_type, entity_id)
+  WHERE status = 'active';
+
+-- -----------------------------------------------------------------------------
+-- Gate flags on the entities themselves
+-- -----------------------------------------------------------------------------
+-- Denormalised for the same reason as third_party_sharing: every partner-facing
+-- query needs to know whether sharing is permitted, and that must not depend on
+-- the caller remembering to join consent_records.
+ALTER TABLE public.cooperatives
+  ADD COLUMN IF NOT EXISTS consent_record_id     UUID REFERENCES public.consent_records(id),
+  ADD COLUMN IF NOT EXISTS consent_status        public.consent_status,
+  ADD COLUMN IF NOT EXISTS third_party_sharing   BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE public.farmers
+  ADD COLUMN IF NOT EXISTS consent_record_id     UUID REFERENCES public.consent_records(id),
+  ADD COLUMN IF NOT EXISTS consent_status        public.consent_status,
+  ADD COLUMN IF NOT EXISTS third_party_sharing   BOOLEAN NOT NULL DEFAULT false;
+
+-- -----------------------------------------------------------------------------
+-- Allow consent one-time codes
+-- -----------------------------------------------------------------------------
+-- `otp_codes.purpose` is constrained to the auth purposes. Consent
+-- verification reuses the same table and the same service, so the constraint
+-- has to admit it — otherwise every consent OTP insert fails the CHECK and the
+-- signer can never be verified.
+ALTER TABLE public.otp_codes DROP CONSTRAINT IF EXISTS otp_codes_purpose_check;
+ALTER TABLE public.otp_codes
+  ADD CONSTRAINT otp_codes_purpose_check
+  CHECK (purpose IN ('signup', 'password_reset', 'email_verify', 'consent'));

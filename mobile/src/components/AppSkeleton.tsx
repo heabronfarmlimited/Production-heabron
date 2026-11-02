@@ -5,20 +5,20 @@
  * applied a default horizontal padding of 16, optionally painted a background
  * image, and dismissed the keyboard on background tap. Same contract here.
  */
+import { ImageBackground } from 'expo-image';
 import type { ReactNode } from 'react';
 import type {
   ImageSourcePropType,
   StyleProp,
   ViewStyle} from 'react-native';
 import {
-  ImageBackground,
   Keyboard,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  View
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -33,6 +33,20 @@ export interface AppSkeletonProps {
   /** Blocks interaction and shows the overlay spinner. */
   isBusy?: boolean;
   busyText?: string;
+  /**
+   * Rendered INSTEAD of `children` while a screen is loading for the first
+   * time — a skeleton in the shape of the content.
+   *
+   * Separate from `isBusy` because the two are different situations.
+   * `isBusy` draws a modal spinner over the screen, which is right for an
+   * action the agent just took: blocking input is the point. For a first
+   * load it is the wrong shape — it says only "wait", gives no sense of
+   * what is coming, and makes the app look like it stopped. A skeleton
+   * keeps the layout stable so nothing jumps when the data lands.
+   *
+   * Pass null or undefined once the data is in.
+   */
+  firstLoad?: ReactNode;
   children?: ReactNode;
   backgroundColor?: string;
   /** Renders a BaseAppBar with this title. */
@@ -58,6 +72,7 @@ export interface AppSkeletonProps {
 export function AppSkeleton({
   isBusy = false,
   busyText,
+  firstLoad,
   children,
   backgroundColor,
   appBarTitle,
@@ -75,6 +90,11 @@ export function AppSkeleton({
 }: AppSkeletonProps) {
   const padding = bodyPadding ?? styles.defaultPadding;
 
+  // The skeleton replaces the body rather than covering it: an empty list
+  // under a placeholder would still render its own "nothing here" state, and
+  // the agent would see both at once.
+  const inner = firstLoad ?? children;
+
   const body = scrollable ? (
     <ScrollView
       style={styles.flex}
@@ -83,10 +103,10 @@ export function AppSkeleton({
       showsVerticalScrollIndicator={false}
       refreshControl={refreshControl}
     >
-      {children}
+      {inner}
     </ScrollView>
   ) : (
-    <View style={[styles.flex, padding]}>{children}</View>
+    <View style={[styles.flex, padding]}>{inner}</View>
   );
 
   const content = (
@@ -121,9 +141,12 @@ export function AppSkeleton({
       >
         {backgroundImage ? (
           <ImageBackground
-            source={backgroundImage}
+            // `ImageSourcePropType` admits an array of sources, which
+            // expo-image's `source` does not; these are always one bundled
+            // asset, so the first entry is the picture.
+            source={Array.isArray(backgroundImage) ? backgroundImage[0] : backgroundImage}
             style={styles.flex}
-            resizeMode="cover"
+            contentFit="cover"
           >
             {content}
           </ImageBackground>

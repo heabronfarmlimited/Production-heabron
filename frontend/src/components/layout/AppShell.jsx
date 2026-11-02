@@ -11,12 +11,22 @@ import {
   LayoutDashboard, UserCheck, FileCheck, Users, Sprout, Gauge, Banknote,
   Building2, BarChart3, Wallet, History, Settings, Search, PieChart,
   AlertTriangle, Circle,
+  // Yield verification, repayments, change requests, consent register.
+  Receipt, GitPullRequest, FileSignature, Truck,
 } from 'lucide-react';
 
+/**
+ * Every icon the sidebar can name.
+ *
+ * Imported by name and mapped explicitly rather than looked up off a
+ * namespace import — see the note above. The cost of that is this map: a nav
+ * entry whose `icon` is missing here silently falls back to a plain circle,
+ * so a new nav item has to be added in BOTH places.
+ */
 const NAV_ICONS = {
   LayoutDashboard, UserCheck, FileCheck, Users, Sprout, Gauge, Banknote,
   Building2, BarChart3, Wallet, History, Settings, Search, PieChart,
-  AlertTriangle,
+  AlertTriangle, Receipt, GitPullRequest, FileSignature, Truck,
 };
 import { useAuth } from '@/lib/auth';
 import { BRAND } from '@/lib/brand';

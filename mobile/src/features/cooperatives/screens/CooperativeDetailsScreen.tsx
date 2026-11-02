@@ -178,9 +178,20 @@ export function CooperativeDetailsScreen({ id }: CooperativeDetailsScreenProps) 
       {/* ── Stats ──────────────────────────────────────────────── */}
       <View style={styles.statsRow}>
         <View style={styles.statCell}>
+          {/*
+            v2: the land total is DERIVED from the farms of linked farmers,
+            not typed by the agent. It only comes back on the detail
+            endpoint, so a cooperative still loading from a list shows a
+            dash rather than "0 Acres" — which would read as "this
+            cooperative has no land" instead of "not counted yet".
+          */}
           <StatPill
             title="Land Size"
-            value={`${cooperative.estimatedLandSize} Acres`}
+            value={
+              cooperative.land
+                ? `${cooperative.land.totalLandAcres} Acres`
+                : '—'
+            }
           />
         </View>
         <View style={{ width: r(12) }} />
@@ -193,6 +204,26 @@ export function CooperativeDetailsScreen({ id }: CooperativeDetailsScreenProps) 
           <StatPill title="Farmers" value={`${cooperativeFarmerCount(cooperative)}`} />
         </View>
       </View>
+
+      {/*
+        The land total is only as complete as the farm records behind it, so
+        the gap is stated rather than left for the agent to infer from a
+        total that looks low.
+      */}
+      {cooperative.land && cooperative.land.membersWithoutFarms > 0 ? (
+        <>
+          <View style={{ height: h(10) }} />
+          <Text style={styles.landNote}>
+            {`Summed from ${cooperative.land.farmCount} farm${
+              cooperative.land.farmCount === 1 ? '' : 's'
+            } across ${cooperative.land.membersWithFarms} member${
+              cooperative.land.membersWithFarms === 1 ? '' : 's'
+            }. ${cooperative.land.membersWithoutFarms} member${
+              cooperative.land.membersWithoutFarms === 1 ? ' has' : 's have'
+            } no farm recorded yet.`}
+          </Text>
+        </>
+      ) : null}
 
       <View style={{ height: h(20) }} />
 
@@ -466,6 +497,13 @@ const styles = StyleSheet.create({
   body: {
     ...textTheme.bodyMedium,
     fontSize: spMin(14),
+  },
+  /** Explains what the derived land total is summed from. */
+  landNote: {
+    ...textTheme.bodySmall,
+    fontSize: spMin(12),
+    color: colors.secondaryTextColor,
+    lineHeight: spMin(17),
   },
   chips: {
     flexDirection: 'row',

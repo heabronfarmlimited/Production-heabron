@@ -11,14 +11,16 @@
  * read oddly. Order here is Fullname, Phone number, NIN, State, L.G.A, Role,
  * with the separator logic derived from position.
  */
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AppButton } from '../../../components/AppButton';
 import { AppSkeleton } from '../../../components/AppSkeleton';
 import { AuthBackButton } from '../../../components/BaseAppBar';
 import { ConfirmSheet } from '../../../components/ConfirmSheet';
+import { SkeletonCard } from '../../../components/Skeleton';
 import { routes } from '../../../core/navigation/routes';
 import { colors } from '../../../core/theme/colors';
 import { h, r, spMin } from '../../../core/theme/responsive';
@@ -55,7 +57,7 @@ export function ProfileScreen() {
 
   return (
     <AppSkeleton
-      isBusy={isLoading && !user}
+      firstLoad={isLoading && !user ? <SkeletonCard rows={5} /> : null}
       appBarLeading={<AuthBackButton />}
       appBarActions={
         <Pressable
@@ -76,7 +78,15 @@ export function ProfileScreen() {
 
       <View style={styles.avatarWrap}>
         {user?.avatarUrl ? (
-          <Image source={{ uri: user.avatarUrl }} style={styles.avatar} />
+          <Image
+            source={{ uri: user.avatarUrl }}
+            style={styles.avatar}
+            contentFit="cover"
+            // Cached, so the avatar does not re-download on every visit to
+            // the profile tab.
+            cachePolicy="memory-disk"
+            transition={180}
+          />
         ) : (
           <View style={[styles.avatar, styles.avatarPlaceholder]}>
             <PersonIcon size={48} />

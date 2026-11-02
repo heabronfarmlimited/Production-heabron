@@ -13,9 +13,10 @@
  * This refreshes the profile on focus and on pull/tap, and routes onward the
  * moment the account becomes active (or to NIN correction if it was rejected).
  */
+import { ImageBackground } from 'expo-image';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ImageBackground, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import AccountUnderReview from '../../../assets/images/account_under_review.svg';
@@ -66,7 +67,7 @@ export function UnderReviewScreen() {
       <ImageBackground
         source={images.authBg}
         style={styles.background}
-        resizeMode="cover"
+        contentFit="cover"
       >
         <SafeAreaView style={styles.flex} edges={['top']}>
           <View style={styles.body}>

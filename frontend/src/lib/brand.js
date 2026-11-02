@@ -21,10 +21,17 @@ export const NAV_ADMIN = [
   { to: '/admin/cooperatives', label: 'Cooperatives', icon: 'Users' },
   { to: '/admin/farmers', label: 'Farmers', icon: 'Sprout' },
   { to: '/admin/credit', label: 'Credit Scoring', icon: 'Gauge' },
+  // Yield verification sits beside credit scoring because that is what it
+  // feeds: the production score is built from verified actual yield.
+  { to: '/admin/productions', label: 'Yield Verification', icon: 'Sprout' },
   { to: '/admin/financing', label: 'Financing', icon: 'Banknote' },
+  { to: '/admin/deliveries', label: 'Deliveries', icon: 'Truck' },
+  { to: '/admin/repayments', label: 'Repayments', icon: 'Receipt' },
   { to: '/admin/partners', label: 'Partners', icon: 'Building2' },
   { to: '/admin/benchmarks', label: 'Benchmarks', icon: 'BarChart3' },
   { to: '/admin/wallets', label: 'Wallets & Settlements', icon: 'Wallet' },
+  { to: '/admin/change-requests', label: 'Change Requests', icon: 'GitPullRequest' },
+  { to: '/admin/consent', label: 'Data Consent', icon: 'FileSignature' },
   { to: '/admin/activity', label: 'Activity Log', icon: 'History' },
   { to: '/admin/settings', label: 'Settings', icon: 'Settings' },
 ];

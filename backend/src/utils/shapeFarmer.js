@@ -25,14 +25,18 @@
  * considered deprecated for client consumption.
  */
 
-function pickFarmProfile(row) {
-  // Supabase returns one-to-one joins as either an object or a 1-element array
-  // depending on the relationship inference. Handle both.
-  const fp = row?.farm_profiles;
-  if (!fp) return null;
-  if (Array.isArray(fp)) return fp[0] || null;
-  return fp;
-}
+const { summarizeFarms, shapeFarms } = require('../services/farms');
+
+/**
+ * NOTE — there is no `pickFarmProfile` here any more.
+ *
+ * It took `farm_profiles[0]`, which is an arbitrary row now that a farmer can
+ * hold several farms: PostgREST does not promise an order on an embedded
+ * select, so two reads of the same farmer could show different acreage and a
+ * different crop. `shapeFarmer` goes through `summarizeFarms` instead, which
+ * orders the set (primary flag first, then oldest), so `farm` is always the
+ * same farm and the land totals sum every farm.
+ */
 
 function pickCooperative(row) {
   const c = row?.cooperatives;
@@ -87,13 +91,29 @@ function shapeCreditScore(cs) {
  */
 function shapeFarmer(row) {
   if (!row) return row;
-  const farmProfile = pickFarmProfile(row);
+  const summary = summarizeFarms(row?.farm_profiles);
   const cooperative = pickCooperative(row);
   const creditScore = pickCreditScore(row);
 
   return {
     ...row,
-    farm: shapeFarm(farmProfile),
+    // The primary farm, for every screen that shows one farm. Unchanged
+    // contract — existing clients keep working.
+    farm: shapeFarm(summary.primary),
+    // v2: the whole set, labelled and in display order. This is what the
+    // "Add Another Farm" screens read.
+    farms: shapeFarms(row?.farm_profiles),
+    // v2: the figures that must be summed rather than taken off one farm.
+    // `total_land_acres` is the farmer's land for scoring purposes.
+    land: {
+      farm_count: summary.farmCount,
+      total_land_acres: summary.totalAcres,
+      mapped_land_acres: summary.mappedAcres,
+      mapped_farm_count: summary.mappedCount,
+      fully_mapped: summary.fullyMapped,
+      crops: summary.crops,
+      primary_crop: summary.primaryCrop,
+    },
     cooperative,
     creditScore: shapeCreditScore(creditScore),
   };
@@ -136,9 +156,49 @@ function maskDigits(value) {
   return '•'.repeat(s.length - KEEP_LAST) + s.slice(-KEEP_LAST);
 }
 
+/**
+ * Removes a farm's exact location while keeping the fact that it was mapped.
+ *
+ * The lender report, which is the considered partner-facing document, prints
+ * `gpsMapped` and never the coordinates — a lender needs to know the boundary
+ * was walked, not where the farmer's land is. The browse endpoints did not
+ * follow that: they select `farm_profiles(*)`, so every lender with a login
+ * could read each farmer's exact farm centre and full boundary ring.
+ *
+ * A farm boundary is as identifying as a home address, which is masked three
+ * lines below, and the consent a farmer gives covers their data being used
+ * for scoring — not their land being locatable by anyone with a partner
+ * account. `gps_mapped` and the acreage stay, because those are what a
+ * lending decision actually rests on.
+ */
+function maskFarmLocation(farm) {
+  if (!farm || typeof farm !== 'object') return farm;
+  const out = { ...farm };
+  if ('gps_lat' in out) out.gps_lat = null;
+  if ('gps_lng' in out) out.gps_lng = null;
+  if ('gps_polygon' in out) out.gps_polygon = null;
+  // The photos show the farm and often its surroundings; a signed URL to
+  // them is not something a browse listing needs to hand out.
+  if ('farm_photo_urls' in out) out.farm_photo_urls = [];
+  if ('land_document_url' in out) out.land_document_url = null;
+  return out;
+}
+
 function maskFarmerIdentity(row) {
   if (!row) return row;
   const out = { ...row };
+
+  // Farm location, in all three places the shape carries it.
+  if (Array.isArray(out.farm_profiles)) {
+    out.farm_profiles = out.farm_profiles.map(maskFarmLocation);
+  } else if (out.farm_profiles) {
+    out.farm_profiles = maskFarmLocation(out.farm_profiles);
+  }
+  if (Array.isArray(out.farms)) out.farms = out.farms.map(maskFarmLocation);
+  if (out.farm) {
+    out.farm = { ...out.farm, gpsLat: null, gpsLng: null, gpsPolygon: null, farmPhotoUrls: [], landDocumentUrl: null };
+  }
+
   if ('nin' in out) out.nin = out.nin ? maskDigits(out.nin) : null;
   if ('bvn' in out) out.bvn = out.bvn ? maskDigits(out.bvn) : null;
   if ('phone' in out) out.phone = out.phone ? maskDigits(out.phone) : null;
@@ -165,6 +225,7 @@ module.exports = {
   shapeFarmer,
   shapeFarmers,
   shapeFarm,
+  maskFarmLocation,
   maskFarmerIdentity,
   shapeFarmerForPartner,
   shapeFarmersForPartner,

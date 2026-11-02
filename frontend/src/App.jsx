@@ -23,6 +23,11 @@ import FinancingDetailPage from '@/pages/admin/FinancingDetailPage';
 import PartnersPage from '@/pages/admin/PartnersPage';
 import PartnerDetailPage from '@/pages/admin/PartnerDetailPage';
 import BenchmarksPage from '@/pages/admin/BenchmarksPage';
+import ConsentPage from '@/pages/admin/ConsentPage';
+import DeliveriesPage from '@/pages/admin/DeliveriesPage';
+import ChangeRequestsPage from '@/pages/admin/ChangeRequestsPage';
+import ProductionsPage from '@/pages/admin/ProductionsPage';
+import RepaymentsPage from '@/pages/admin/RepaymentsPage';
 import WalletsPage from '@/pages/admin/WalletsPage';
 import ActivityPage from '@/pages/admin/ActivityPage';
 import SettingsPage from '@/pages/shared/SettingsPage';
@@ -199,6 +204,14 @@ export default function App() {
         <Route path="partners" element={<PartnersPage />} />
         <Route path="partners/:partnerId" element={<PartnerDetailPage />} />
         <Route path="benchmarks" element={<BenchmarksPage />} />
+        {/* These four were served by the backend with no screen calling
+            them, so yield verification, repayment voiding, agent change
+            requests and the consent register were all unreachable. */}
+        <Route path="productions" element={<ProductionsPage />} />
+        <Route path="repayments" element={<RepaymentsPage />} />
+        <Route path="deliveries" element={<DeliveriesPage />} />
+        <Route path="change-requests" element={<ChangeRequestsPage />} />
+        <Route path="consent" element={<ConsentPage />} />
         <Route path="wallets" element={<WalletsPage />} />
         <Route path="activity" element={<ActivityPage />} />
         <Route path="notifications" element={<NotificationsPage audience="admin" />} />

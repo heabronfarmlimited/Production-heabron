@@ -28,9 +28,15 @@ const FIELD_MAP = {
   cooperative: {
     name: 'name', leaderName: 'leader_name', leaderPhone: 'leader_phone',
     address: 'address', state: 'state', lga: 'lga', primaryCrop: 'primary_crop',
-    cropsSupported: 'crops_supported', estimatedLandSize: 'estimated_land_size',
+    cropsSupported: 'crops_supported',
+    // `estimatedLandSize` is deliberately absent: the v2 flow retired the
+    // field and the land total is derived from member farms, so there is
+    // nothing for an admin to approve. A request carrying only that field now
+    // gets "No editable fields in proposedChanges" at submission time rather
+    // than being approved and applying nothing.
   },
   farm_profile: {
+    farmLabel: 'farm_label',
     farmSizeAcres: 'farm_size_acres', plotCount: 'plot_count', cropType: 'crop_type',
     secondaryCrops: 'secondary_crops', soilType: 'soil_type', waterSource: 'water_source',
     irrigationAccess: 'irrigation_access', landOwnership: 'land_ownership',

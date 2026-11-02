@@ -2,9 +2,10 @@
 
 const { supabaseAdmin } = require('../config/supabase');
 const { ok, notFound, forbidden } = require('../utils/response');
-const { sumColumn } = require('../utils/pagination');
+const { sumColumn, fetchAllRows } = require('../utils/pagination');
 const { chunk } = require('../utils/profiles');
 const { loanPrincipal } = require('../services/credit-score');
+const { summarizeFarms, toFarmList, cooperativeLandTotal } = require('../services/farms');
 const logger = require('../utils/logger');
 
 // ============================================================================
@@ -41,19 +42,37 @@ async function agentDashboard(req, res) {
   const sb = supabaseAdmin();
   const userId = req.user.userId;
 
-  const [coopCount, farmerCount, deliveryCount, financingCounts, recentActivity] = await Promise.all([
+  const [coopCount, farmerCount, deliveryCount, financingCounts, recentActivity, landRes] = await Promise.all([
     sb.from('cooperatives').select('id', { count: 'exact', head: true }).eq('created_by_agent_id', userId),
     sb.from('farmers').select('id', { count: 'exact', head: true }).eq('created_by_agent_id', userId),
     sb.from('produce_deliveries').select('id', { count: 'exact', head: true }).eq('logged_by_agent_id', userId),
     countByStatus(sb, 'financing_requests', FINANCING_STATUSES, (q) => q.eq('submitted_by_agent_id', userId)),
     sb.from('activity_logs').select('*').eq('actor_id', userId).order('created_at', { ascending: false }).limit(15),
+    // v2 home tiles: land recorded, and how many farmers still have no farm
+    // area. The second number is the one an agent acts on — a farmer without
+    // an area cannot be credit-scored, so it is work outstanding rather than
+    // a statistic.
+    sb
+      .from('farmers')
+      .select('id, farm_profiles(id, farm_size_acres, computed_area_acres, is_primary, created_at)')
+      .eq('created_by_agent_id', userId)
+      .limit(5000),
   ]);
 
   // FIXED — every count query discarded its error, so a transient database
   // failure rendered as a confident dashboard of zeroes.
-  for (const r of [coopCount, farmerCount, deliveryCount, recentActivity]) {
+  for (const r of [coopCount, farmerCount, deliveryCount, recentActivity, landRes]) {
     if (r.error) throw r.error;
   }
+
+  const farmerRows = landRes.data || [];
+  const land = cooperativeLandTotal(farmerRows);
+  // A farmer with a farm row but no acreage on any of them: the record looks
+  // complete on the list screen but cannot be scored.
+  const farmersWithoutArea = farmerRows.filter((f) => {
+    const summary = summarizeFarms(f.farm_profiles);
+    return summary.farmCount > 0 && summary.totalAcres === 0;
+  }).length;
 
   return ok(res, {
     cooperatives: coopCount.count || 0,
@@ -61,6 +80,16 @@ async function agentDashboard(req, res) {
     deliveries: deliveryCount.count || 0,
     financing: financingCounts,
     recentActivity: recentActivity.data || [],
+    land: {
+      total_land_acres: land.total_land_acres,
+      farm_count: land.farm_count,
+      farmers_with_farms: land.members_with_farms,
+      // Two different gaps, deliberately separate: no farm record at all,
+      // versus a farm record with no area. The first needs onboarding
+      // finished, the second needs a measurement.
+      farmers_without_farms: land.members_without_farms,
+      farmers_without_area: farmersWithoutArea,
+    },
   });
 }
 
@@ -278,19 +307,49 @@ async function partnerDashboard(req, res) {
  * `crop_type` plus a `secondary_crops` array — that is the real count.
  */
 function cropsForFarmer(farmer) {
-  const profiles = Array.isArray(farmer?.farm_profiles)
-    ? farmer.farm_profiles
-    : farmer?.farm_profiles
-      ? [farmer.farm_profiles]
-      : [];
   const crops = new Set();
-  for (const p of profiles) {
+  for (const p of toFarmList(farmer?.farm_profiles)) {
     if (p?.crop_type) crops.add(String(p.crop_type).toLowerCase());
     for (const c of p?.secondary_crops || []) {
       if (c) crops.add(String(c).toLowerCase());
     }
   }
   return [...crops];
+}
+
+/**
+ * Land per cooperative, summed from member farms.
+ *
+ * The v2 flow stopped collecting `cooperatives.estimated_land_size` (an agent
+ * typed it, nothing checked it). The land total is derived instead: every
+ * farm of every farmer still linked to the cooperative.
+ *
+ * One query for all cooperatives rather than one each, and scoped to the
+ * cooperative rather than to the exporting agent — a cooperative's land is
+ * all of its members' land, including members another agent onboarded.
+ */
+async function landByCooperative(sb, cooperativeIds) {
+  const ids = [...new Set((cooperativeIds || []).filter(Boolean))];
+  const totals = new Map();
+  if (ids.length === 0) return totals;
+
+  const rows = await fetchAllRows(() =>
+    sb
+      .from('farmers')
+      .select('id, cooperative_id, farm_profiles(id, farm_size_acres, computed_area_acres, is_primary, created_at)')
+      .in('cooperative_id', ids)
+  );
+
+  const byCoop = new Map();
+  for (const farmer of rows || []) {
+    const list = byCoop.get(farmer.cooperative_id) || [];
+    list.push(farmer);
+    byCoop.set(farmer.cooperative_id, list);
+  }
+  for (const id of ids) {
+    totals.set(id, cooperativeLandTotal(byCoop.get(id) || []));
+  }
+  return totals;
 }
 
 async function agentExport(req, res) {
@@ -303,8 +362,8 @@ async function agentExport(req, res) {
 
   const [profileRes, coopsRes, farmersRes, repaymentsRes, financingRes] = await Promise.all([
     sb.from('profiles').select('full_name, email, phone').eq('user_id', agentId).maybeSingle(),
-    sb.from('cooperatives').select('id, name, lga, state, total_members, estimated_land_size, crops_supported, cooperative_tier').eq('created_by_agent_id', agentId).order('created_at', { ascending: false }).limit(1000),
-    sb.from('farmers').select('id, full_name, cooperative_id, credit_score, cooperatives(name), farm_profiles(farm_size_acres, crop_type, secondary_crops)').eq('created_by_agent_id', agentId).limit(5000),
+    sb.from('cooperatives').select('id, name, lga, state, total_members, crops_supported, cooperative_tier').eq('created_by_agent_id', agentId).order('created_at', { ascending: false }).limit(1000),
+    sb.from('farmers').select('id, full_name, cooperative_id, credit_score, cooperatives(name), farm_profiles(id, farm_size_acres, computed_area_acres, crop_type, secondary_crops, is_primary, created_at)').eq('created_by_agent_id', agentId).limit(5000),
     sb.from('repayment_records').select('id, financing_request_id, amount_paid, payment_date, payment_method').eq('recorded_by_agent_id', agentId).order('payment_date', { ascending: false }).limit(50),
     sb.from('financing_requests').select('id, loan_amount, status, cooperative_id, created_at').eq('submitted_by_agent_id', agentId).limit(2000),
   ]);
@@ -314,21 +373,32 @@ async function agentExport(req, res) {
     if (r.error) throw r.error;
   }
 
-  const farmers = (farmersRes.data || []).map((f) => ({
-    id: f.id,
-    name: f.full_name,
-    cooperative: f.cooperatives?.name || null,
-    cropsCount: cropsForFarmer(f).length,
-    farmSize: Number(f.farm_profiles?.[0]?.farm_size_acres) || 0,
-    coopScore: Number(f.credit_score) || 0,
-  }));
+  const coopLand = await landByCooperative(sb, (coopsRes.data || []).map((c) => c.id));
+
+  const farmers = (farmersRes.data || []).map((f) => {
+    const summary = summarizeFarms(f.farm_profiles);
+    return {
+      id: f.id,
+      name: f.full_name,
+      cooperative: f.cooperatives?.name || null,
+      cropsCount: cropsForFarmer(f).length,
+      // FIXED — was `farm_profiles[0].farm_size_acres`: one arbitrary plot.
+      // A farmer with several farms had the rest of their land missing from
+      // the export an agent hands to a lender.
+      farmSize: summary.totalAcres,
+      farmCount: summary.farmCount,
+      coopScore: Number(f.credit_score) || 0,
+    };
+  });
 
   const cooperatives = (coopsRes.data || []).map((c) => ({
     id: c.id,
     name: c.name,
     farmers: c.total_members || 0,
     location: [c.lga, c.state].filter(Boolean).join(', '),
-    landSizeAcres: Number(c.estimated_land_size) || 0,
+    // Derived from member farms, not the retired `estimated_land_size`.
+    landSizeAcres: coopLand.get(c.id)?.total_land_acres || 0,
+    farmCount: coopLand.get(c.id)?.farm_count || 0,
     cropsCount: c.crops_supported?.length || 0,
     // FIXED — unscored cooperatives were exported as tier 'D' (high risk).
     tier: c.cooperative_tier || null,
@@ -382,8 +452,11 @@ async function farmerExport(req, res) {
     if (r.error) throw r.error;
   }
 
-  const fp = farmer.farm_profiles?.[0] || null;
-  const crops = [fp?.crop_type, ...(fp?.secondary_crops || [])].filter(Boolean);
+  // FIXED — took `farm_profiles[0]`: one arbitrary plot's acreage and only
+  // that plot's crops. A farmer with several farms exported with part of
+  // their land and part of their crop list missing.
+  const farmSummary = summarizeFarms(farmer.farm_profiles);
+  const crops = farmSummary.crops;
 
   const financingRequests = (financingRes.data || []).map((f) => ({
     loanRef: f.id.slice(0, 8),
@@ -417,7 +490,8 @@ async function farmerExport(req, res) {
       // still exported as belonging to one.
       cooperative: farmer.cooperatives ? 1 : 0,
       crops: crops.length,
-      landSizeAcres: Number(fp?.farm_size_acres) || 0,
+      farms: farmSummary.farmCount,
+      landSizeAcres: farmSummary.totalAcres,
     },
     crops,
     tables: {
@@ -441,7 +515,7 @@ async function cooperativeExport(req, res) {
   if (req.user.role === 'field_agent' && coop.created_by_agent_id !== req.user.userId) return forbidden(res);
 
   const [farmersRes, financingRes, repaymentsRes] = await Promise.all([
-    sb.from('farmers').select('id, full_name, credit_score, farm_profiles(farm_size_acres, crop_type, secondary_crops)').eq('cooperative_id', cooperativeId).limit(5000),
+    sb.from('farmers').select('id, full_name, credit_score, farm_profiles(id, farm_size_acres, computed_area_acres, crop_type, secondary_crops, is_primary, created_at)').eq('cooperative_id', cooperativeId).limit(5000),
     sb.from('financing_requests').select('id, loan_amount, approved_amount, disbursed_amount, status, created_at').eq('cooperative_id', cooperativeId).order('created_at', { ascending: false }).limit(1000),
     sb.from('repayment_records').select('id, financing_request_id, amount_paid, payment_date, payment_method, financing_requests!inner(cooperative_id)').eq('financing_requests.cooperative_id', cooperativeId).eq('voided', false).order('payment_date', { ascending: false }).limit(100),
   ]);
@@ -449,13 +523,21 @@ async function cooperativeExport(req, res) {
     if (r.error) throw r.error;
   }
 
-  const farmers = (farmersRes.data || []).map((f) => ({
-    id: f.id,
-    name: f.full_name,
-    cropsCount: cropsForFarmer(f).length,
-    farmSizeAcres: Number(f.farm_profiles?.[0]?.farm_size_acres) || 0,
-    coopScore: Number(f.credit_score) || 0,
-  }));
+  // Land summed across each farmer's farms, and across the cooperative. The
+  // cooperative's own `estimated_land_size` is retired (v2 flow); this is the
+  // derived total.
+  const coopLand = cooperativeLandTotal(farmersRes.data || []);
+  const farmers = (farmersRes.data || []).map((f) => {
+    const summary = summarizeFarms(f.farm_profiles);
+    return {
+      id: f.id,
+      name: f.full_name,
+      cropsCount: cropsForFarmer(f).length,
+      farmSizeAcres: summary.totalAcres,
+      farmCount: summary.farmCount,
+      coopScore: Number(f.credit_score) || 0,
+    };
+  });
 
   // FIXED — this counted only `crop_type` and ignored `secondary_crops`, so a
   // cooperative's crop list on the export was systematically short.
@@ -490,6 +572,12 @@ async function cooperativeExport(req, res) {
       crops: crops.length,
       repayments: repayments.length,
       financingRequests: financingRequests.length,
+      // Derived from member farms (v2 flow); the cooperative no longer
+      // carries an agent-entered estimate.
+      landSizeAcres: coopLand.total_land_acres,
+      farms: coopLand.farm_count,
+      membersWithFarms: coopLand.members_with_farms,
+      membersWithoutFarms: coopLand.members_without_farms,
     },
     crops,
     tables: {

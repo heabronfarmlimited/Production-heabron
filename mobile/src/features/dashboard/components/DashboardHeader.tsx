@@ -20,12 +20,14 @@ import { colors } from '../../../core/theme/colors';
 import { r, spMin } from '../../../core/theme/responsive';
 import { fontWeights, textTheme } from '../../../core/theme/typography';
 import { useUser } from '../../auth/model/authStore';
+import { useNetworkStatus } from '../../farmers/hooks/useOfflineFarmerQueue';
 import { useUnreadCount } from '../../notifications/hooks/useUnreadCount';
 
 export function DashboardHeader() {
   const router = useRouter();
   const user = useUser();
   const { count: unread } = useUnreadCount();
+  const { isConnected } = useNetworkStatus();
 
   // Guarded: an empty or missing name must not throw.
   const firstName = (user?.fullName ?? '').trim().split(/\s+/)[0] ?? '';
@@ -36,7 +38,23 @@ export function DashboardHeader() {
         <Text style={styles.greeting} numberOfLines={1}>
           {firstName ? `Hello, ${firstName}` : 'Hello'}
         </Text>
-        <Text style={styles.subtitle}>Here’s your overview</Text>
+        {/*
+          v2: connectivity belongs in the header, not on a banner that only
+          appears when something has already gone wrong. An agent in the
+          field needs to know BEFORE they spend ten minutes on a farmer
+          whether the record will reach the server or be queued.
+        */}
+        <View style={styles.statusRow}>
+          <View
+            style={[
+              styles.statusDot,
+              { backgroundColor: isConnected ? colors.success : colors.warning },
+            ]}
+          />
+          <Text style={styles.subtitle}>
+            {isConnected ? 'Online' : 'Offline — records will be queued'}
+          </Text>
+        </View>
       </View>
 
       <View style={styles.actions}>
@@ -92,6 +110,17 @@ const styles = StyleSheet.create({
     ...textTheme.bodySmall,
     fontSize: spMin(12),
     color: colors.grey,
+    flexShrink: 1,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: r(6),
+  },
+  statusDot: {
+    width: r(7),
+    height: r(7),
+    borderRadius: r(7),
   },
   actions: {
     flexDirection: 'row',

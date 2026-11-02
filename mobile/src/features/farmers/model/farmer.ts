@@ -52,6 +52,12 @@ export interface FarmerCooperative {
  * into this one interface.
  */
 export interface FarmerFarm {
+  /**
+   * The agent's own name for the plot ("Cassava plot"). Null when unnamed —
+   * the server then labels it by position, which `label` on
+   * `FarmerFarmProfile` carries.
+   */
+  farmLabel: string | null;
   farmSizeAcres: number | null;
   cropType: string | null;
   secondaryCrops: string[];
@@ -81,6 +87,24 @@ export interface FarmerFarmProfile extends FarmerFarm {
   computedAreaAcres: number | null;
   createdAt: string | null;
   updatedAt: string | null;
+  /**
+   * Exactly one of a farmer's farms is the primary one. It is the farm the
+   * single-farm screens show and the one a nested `farm` edit changes. Land
+   * totals sum every farm regardless.
+   */
+  isPrimary: boolean;
+  /**
+   * What to show as this farm's name: the agent's label, or "Farm 1" /
+   * "Farm 2" by position. Supplied by the server so the app and the lender
+   * report never number the same farm differently.
+   */
+  label: string | null;
+  /**
+   * The acreage this farm contributes — the entered size, or the walked area
+   * when nothing was entered. Resolved server-side so the app does not have
+   * to repeat the rule.
+   */
+  acres: number | null;
 }
 
 /** `FarmerCreditScore` — reads both camelCase and snake_case. */
@@ -134,8 +158,15 @@ export interface Farmer {
   creditScores: FarmerCreditScore | null;
   /** `creditScore` object from `shapeFarmer` — same key as the number. */
   creditScoreObj: FarmerCreditScore | null;
-  /** `farm` — the camelCase contract object. */
+  /** `farm` — the camelCase contract object: the PRIMARY farm. */
   farm: FarmerFarm | null;
+  /**
+   * `farms` — every farm the farmer holds, labelled and in display order
+   * (primary first, then oldest). Empty on responses from an older server.
+   */
+  farms: FarmerFarmProfile[];
+  /** `land` — the farmer's totals across all farms. Null on list responses. */
+  land: FarmerLand | null;
 }
 
 // ----------------------------------------------------------------- parsing
@@ -169,6 +200,7 @@ export function parseGpsPolygon(raw: unknown): GpsPoint[] {
 export function parseFarm(raw: unknown): FarmerFarm {
   const f = obj(raw);
   return {
+    farmLabel: nullableStr(pick(f, 'farm_label', 'farmLabel')),
     farmSizeAcres: nullableNum(pick(f, 'farm_size_acres', 'farmSizeAcres')),
     cropType: nullableStr(pick(f, 'crop_type', 'cropType')),
     secondaryCrops: strList(pick(f, 'secondary_crops', 'secondaryCrops')),
@@ -197,6 +229,57 @@ export function parseFarmProfile(raw: unknown): FarmerFarmProfile {
     computedAreaAcres: nullableNum(pick(f, 'computed_area_acres', 'computedAreaAcres')),
     createdAt: nullableStr(pick(f, 'created_at', 'createdAt')),
     updatedAt: nullableStr(pick(f, 'updated_at', 'updatedAt')),
+    isPrimary: bool(pick(f, 'is_primary', 'isPrimary')),
+    label: nullableStr(f.label),
+    acres: nullableNum(f.acres),
+  };
+}
+
+/**
+ * A farmer's land, summed across their farms.
+ *
+ * The farmer may hold several plots, so no single farm's acreage is "their
+ * land". `totalLandAcres` is the figure the production score divides by and
+ * the one a lender sizes a loan against.
+ */
+export interface FarmerLand {
+  farmCount: number;
+  totalLandAcres: number;
+  mappedLandAcres: number;
+  mappedFarmCount: number;
+  fullyMapped: boolean;
+  crops: string[];
+  primaryCrop: string | null;
+}
+
+/** `GET /agent/farmers/:farmerId/farms` → the set plus its totals. */
+export interface FarmerFarmSet {
+  farmerId: string | null;
+  farms: FarmerFarmProfile[];
+  land: FarmerLand | null;
+}
+
+export function parseFarmerFarmSet(raw: unknown): FarmerFarmSet {
+  const r = obj(raw);
+  const farms = Array.isArray(r.farms) ? r.farms.map(parseFarmProfile) : [];
+  return {
+    farmerId: nullableStr(pick(r, 'farmer_id', 'farmerId')),
+    farms,
+    land: parseFarmerLand(r.land),
+  };
+}
+
+export function parseFarmerLand(raw: unknown): FarmerLand | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const l = obj(raw);
+  return {
+    farmCount: nullableInt(pick(l, 'farm_count', 'farmCount')) ?? 0,
+    totalLandAcres: nullableNum(pick(l, 'total_land_acres', 'totalLandAcres')) ?? 0,
+    mappedLandAcres: nullableNum(pick(l, 'mapped_land_acres', 'mappedLandAcres')) ?? 0,
+    mappedFarmCount: nullableInt(pick(l, 'mapped_farm_count', 'mappedFarmCount')) ?? 0,
+    fullyMapped: bool(pick(l, 'fully_mapped', 'fullyMapped')),
+    crops: strList(l.crops),
+    primaryCrop: nullableStr(pick(l, 'primary_crop', 'primaryCrop')),
   };
 }
 
@@ -328,6 +411,8 @@ export function parseFarmer(raw: unknown): Farmer {
     creditScores: parseFarmerCreditScore(creditScoresRaw),
     creditScoreObj: parseFarmerCreditScore(creditScoreObjRaw),
     farm: f.farm ? parseFarm(f.farm) : null,
+    farms: Array.isArray(f.farms) ? f.farms.map(parseFarmProfile) : [],
+    land: parseFarmerLand(f.land),
   };
 }
 
@@ -344,12 +429,66 @@ export function parseFarmer(raw: unknown): Farmer {
  */
 export function resolveFarm(farmer?: Farmer | null): FarmerFarm | null {
   if (!farmer) return null;
-  return farmer.farm ?? farmer.farmProfiles[0] ?? null;
+  // `farm` is the server's own pick of the primary farm, so it is preferred.
+  // The fallbacks matter for an older response shape: `farms` is already
+  // ordered primary-first, and `farmProfiles` is not, so the primary row is
+  // looked for explicitly before settling for an arbitrary one.
+  return (
+    farmer.farm ??
+    farmer.farms[0] ??
+    farmer.farmProfiles.find((p) => p.isPrimary) ??
+    farmer.farmProfiles[0] ??
+    null
+  );
 }
 
-/** The `farm_profiles` row id, needed by nothing on the wire but handy in UI. */
+/**
+ * Every farm the farmer holds, in display order.
+ *
+ * Prefers the server's ordered `farms`, falling back to `farm_profiles` with
+ * the primary farm pulled to the front — an embedded select has no promised
+ * order, so without this the cards could reorder between reads.
+ */
+export function resolveFarms(farmer?: Farmer | null): FarmerFarmProfile[] {
+  if (!farmer) return [];
+  if (farmer.farms.length > 0) return farmer.farms;
+  return [...farmer.farmProfiles].sort((a, b) => {
+    if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+    return (a.createdAt ?? '') < (b.createdAt ?? '') ? -1 : 1;
+  });
+}
+
+/**
+ * The farmer's land, in acres, across every farm.
+ *
+ * Falls back to summing the farm rows when the server did not send `land`
+ * (an older build, or a list response). Returns null only when the farmer has
+ * no farms at all, which callers must distinguish from 0 acres: "no farm
+ * recorded" and "a farm of no size" need different wording on screen.
+ */
+export function resolveLandAcres(farmer?: Farmer | null): number | null {
+  if (farmer?.land) return farmer.land.totalLandAcres;
+  const farms = resolveFarms(farmer);
+  if (farms.length === 0) return null;
+  const total = farms.reduce(
+    (sum, f) => sum + (f.acres ?? f.farmSizeAcres ?? f.computedAreaAcres ?? 0),
+    0,
+  );
+  return Math.round((total + Number.EPSILON) * 100) / 100;
+}
+
+/** What to show as a farm's name, given its position in the list. */
+export function farmDisplayLabel(
+  farm: FarmerFarmProfile | null | undefined,
+  index: number,
+): string {
+  const explicit = farm?.label?.trim() || farm?.farmLabel?.trim();
+  return explicit || `Farm ${index + 1}`;
+}
+
+/** The `farm_profiles` row id of the PRIMARY farm. */
 export function resolveFarmProfileId(farmer?: Farmer | null): string | null {
-  return farmer?.farmProfiles[0]?.id ?? null;
+  return resolveFarms(farmer)[0]?.id ?? null;
 }
 
 /** `[address, lga, state]` joined, else `'No address provided'`. */
@@ -399,6 +538,8 @@ export function resolveYieldCrops(farmer?: Farmer | null): string[] {
 // ------------------------------------------------------------ request bodies
 /** The farm block of `createFarmer` / `updateFarmer` — all camelCase. */
 export interface FarmProfileBody {
+  /** The agent's name for the plot. Omitted means the server labels it. */
+  farmLabel?: string;
   farmSizeAcres?: number;
   cropType?: string;
   secondaryCrops?: string[];
@@ -409,6 +550,12 @@ export interface FarmProfileBody {
   yearsExperience?: number;
   gpsLat?: number;
   gpsLng?: number;
+  /**
+   * A walked boundary. The server derives the area, the centre and
+   * `gps_mapped` from it, so sending this is how a farm becomes mapped
+   * without a separate map-farm call.
+   */
+  gpsPolygon?: GpsPoint[];
   landDocumentUrl?: string;
   landDocumentType?: string;
   farmPhotoUrls?: string[];
@@ -417,6 +564,19 @@ export interface FarmProfileBody {
 /** The input a farmer form produces once uploads have resolved to URLs. */
 export interface FarmerFormInput {
   cooperativeId: string;
+  /**
+   * Idempotency key, one per form session (v2 "duplicate-safe client UUID").
+   * A retry carrying the same value returns the farmer that already exists
+   * instead of creating a second record for the same person.
+   */
+  clientRequestId?: string;
+  /**
+   * Consent record id from POST /agent/consent. The server refuses to create a
+   * farmer without one (data consent specification, section 4). Optional here
+   * because an offline capture is queued before consent is verified and
+   * carries it at sync time.
+   */
+  consentId?: string;
   fullName: string;
   dateOfBirth: string;
   gender: string;
@@ -448,6 +608,10 @@ export interface FarmerFormInput {
 export function toFarmerBody(input: FarmerFormInput): Record<string, unknown> {
   return compact({
     cooperativeId: input.cooperativeId,
+    clientRequestId: input.clientRequestId,
+    // `compact` drops undefined, so an absent consent id is omitted and the
+    // validator's .optional() applies. The server still refuses the create.
+    consentId: input.consentId,
     fullName: input.fullName.trim(),
     dateOfBirth: input.dateOfBirth,
     gender: input.gender,
@@ -469,6 +633,7 @@ export function toFarmerBody(input: FarmerFormInput): Record<string, unknown> {
 
 export function toFarmProfileBody(farm: FarmProfileBody): Record<string, unknown> {
   return compact({
+    farmLabel: farm.farmLabel,
     farmSizeAcres: farm.farmSizeAcres,
     cropType: farm.cropType,
     // The validator caps this at 7 — `.max(7)`.
@@ -480,6 +645,7 @@ export function toFarmProfileBody(farm: FarmProfileBody): Record<string, unknown
     yearsExperience: farm.yearsExperience,
     gpsLat: farm.gpsLat,
     gpsLng: farm.gpsLng,
+    gpsPolygon: farm.gpsPolygon,
     landDocumentUrl: farm.landDocumentUrl,
     landDocumentType: farm.landDocumentType,
     farmPhotoUrls: farm.farmPhotoUrls,

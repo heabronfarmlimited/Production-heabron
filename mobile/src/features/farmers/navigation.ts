@@ -40,7 +40,15 @@ export const farmersRoutes = {
 
   /** Boundary capture — new; no Dart equivalent. */
   captureBoundary: routes.farmerBoundary,
+  /** The farmer's farms (v2 "Add Another Farm"). */
+  farms: routes.farmerFarms,
+  farmAdd: routes.farmerFarmAdd,
+  farmEdit: routes.farmerFarmEdit,
 
   /** Farmer-scoped: the screen loads that farmer's repayable requests. */
   recordRepayment: routes.recordRepayment,
+  /** The v2 Update Record hub, and the delivery form it opens. */
+  updateRecord: routes.farmerUpdateRecord,
+  map: routes.farmerMap,
+  logDelivery: routes.farmerLogDelivery,
 } as const;

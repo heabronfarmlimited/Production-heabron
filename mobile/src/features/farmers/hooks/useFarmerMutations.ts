@@ -177,12 +177,22 @@ export function useMapFarm(farmerId: string) {
   const mutation = useMutation<
     MapFarmResult,
     unknown,
-    { gpsPolygon: GpsPoint[]; overrideSizeAcres?: number }
+    {
+      gpsPolygon: GpsPoint[];
+      overrideSizeAcres?: number;
+      /**
+       * Which farm the boundary belongs to. Omitted maps the primary farm.
+       * A farmer with several plots needs this, or farm 2's boundary is
+       * written onto farm 1.
+       */
+      farmId?: string;
+    }
   >({
-    mutationFn: ({ gpsPolygon, overrideSizeAcres }) =>
-      mapFarm(farmerId, gpsPolygon, overrideSizeAcres),
+    mutationFn: ({ gpsPolygon, overrideSizeAcres, farmId }) =>
+      mapFarm(farmerId, gpsPolygon, overrideSizeAcres, farmId),
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: qk.farmer(farmerId) });
+      void queryClient.invalidateQueries({ queryKey: qk.farmerFarms(farmerId) });
       void queryClient.invalidateQueries({ queryKey: ['farmers'] });
       // The farm size feeds yield-per-hectare, so the score is recalculated.
       void queryClient.invalidateQueries({ queryKey: qk.farmerCreditScore(farmerId) });

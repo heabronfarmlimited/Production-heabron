@@ -45,6 +45,24 @@ export const endpoints = {
   farmerById: (id: string) => `/agent/farmers/${id}`,
   verifyFarmerNin: (farmerId: string) => `/agent/farmers/${farmerId}/verify-nin`,
   mapFarm: (farmerId: string) => `/agent/farmers/${farmerId}/map-farm`,
+
+  // Farms within a farmer ("Add Another Farm"). The nested `farm` object on
+  // create/update still addresses the farmer's PRIMARY farm; these address a
+  // specific one.
+  /**
+   * Satellite basemap, proxied by the backend so the provider API key never
+   * ships in the app bundle — a Maps Static key cannot be restricted to a
+   * mobile application, so one embedded here would be unrestricted and
+   * readable by anyone who opens the APK.
+   */
+  mapConfig: '/agent/map/config',
+  mapSatellite: '/agent/map/satellite',
+
+  farmerFarms: (farmerId: string) => `/agent/farmers/${farmerId}/farms`,
+  farmerFarmById: (farmerId: string, farmId: string) =>
+    `/agent/farmers/${farmerId}/farms/${farmId}`,
+  farmerFarmPrimary: (farmerId: string, farmId: string) =>
+    `/agent/farmers/${farmerId}/farms/${farmId}/primary`,
   farmerCreditScore: (farmerId: string) => `/agent/farmers/${farmerId}/credit-score`,
   farmerSeasonalYield: (farmerId: string) => `/agent/farmers/${farmerId}/seasonal-yield`,
   farmerMarketAccess: (farmerId: string) => `/agent/farmers/${farmerId}/market-access`,
@@ -94,6 +112,18 @@ export const endpoints = {
   uploadDoc: (kind: UploadKind) => `/agent/uploads-doc/${kind}`,
   uploadSignUrl: '/agent/uploads/sign-url',
 
+  // ------------------------------------------------------------- reports
+  farmerCreditReport: (farmerId: string) => `/agent/farmers/${farmerId}/credit-report`,
+  cooperativeCreditReport: (cooperativeId: string) =>
+    `/agent/cooperatives/${cooperativeId}/credit-report`,
+
+  // ------------------------------------------------------------- consent
+  consent: '/agent/consent',
+  consentVerify: (consentId: string) => `/agent/consent/${consentId}/verify`,
+  consentResend: (consentId: string) => `/agent/consent/${consentId}/resend`,
+  consentForEntity: (entityType: 'cooperative' | 'farmer', entityId: string) =>
+    `/agent/consent/${entityType}/${entityId}`,
+
   // ------------------------------------------------------------- imports
   imports: '/agent/imports',
   importsTemplate: '/agent/imports/template',
@@ -130,6 +160,10 @@ export const UPLOAD_KINDS = [
   // Public logos
   'cooperative_logo',
   'partner_logo',
+  // Data-consent evidence (private, admin-only to view).
+  'consent_signature',
+  'consent_voice',
+  'consent_thumbprint',
 ] as const;
 
 export type UploadKind = (typeof UPLOAD_KINDS)[number];

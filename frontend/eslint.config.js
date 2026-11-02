@@ -119,4 +119,30 @@ export default [
       'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
+
+  /**
+   * Build and check scripts run under Node, not in a browser.
+   *
+   * Without this they were linted with only browser globals, so every
+   * `console.log` and `process.exit` in `scripts/` was a `no-undef` error —
+   * which is why the contract checker could not be added until now.
+   */
+  {
+    files: ['scripts/**/*.{js,mjs,cjs}', '*.config.js', 'vite.config.js'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        URL: 'readonly',
+        Buffer: 'readonly',
+        __dirname: 'readonly',
+      },
+    },
+    rules: {
+      // A script's whole output is its console output.
+      'no-console': 'off',
+    },
+  },
 ];

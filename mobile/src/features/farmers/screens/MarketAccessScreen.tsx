@@ -23,6 +23,7 @@ import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 import { AppButton } from '../../../components/AppButton';
 import { AppSkeleton } from '../../../components/AppSkeleton';
 import { ConfirmSheet } from '../../../components/ConfirmSheet';
+import { SkeletonList } from '../../../components/Skeleton';
 import { labelFor, PRICE_CONTEXTS } from '../../../core/api/domainConstants';
 import { colors } from '../../../core/theme/colors';
 import { h, r, spMin } from '../../../core/theme/responsive';
@@ -58,7 +59,7 @@ export function MarketAccessScreen(props: MarketAccessScreenProps = {}) {
     <>
       <AppSkeleton
         appBarTitle="Market Access"
-        isBusy={isLoading && records.length === 0}
+        firstLoad={isLoading && records.length === 0 ? <SkeletonList /> : null}
         bottomBar={
           <View style={styles.bottomBar}>
             <AppButton

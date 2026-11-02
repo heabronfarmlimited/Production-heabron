@@ -10,6 +10,7 @@ const v = require('../validators/domain');
 const dashboard = require('../controllers/dashboard.controller');
 const cooperatives = require('../controllers/cooperatives.controller');
 const farmers = require('../controllers/farmers.controller');
+const map = require('../controllers/map.controller');
 const deliveries = require('../controllers/deliveries.controller');
 const financing = require('../controllers/financing.controller');
 const repayments = require('../controllers/repayments.controller');
@@ -20,6 +21,8 @@ const changeRequests = require('../controllers/changeRequests.controller');
 const wallet = require('../controllers/wallet.controller');
 const notifications = require('../controllers/notifications.controller');
 const uploads = require('../controllers/uploads.controller');
+const consent = require('../controllers/consent.controller');
+const creditReport = require('../controllers/creditReport.controller');
 const imports = require('../controllers/imports.controller');
 const profile = require('../controllers/profile.controller');
 
@@ -54,6 +57,21 @@ router.patch('/farmers/:farmerId', requireParamUuid('farmerId'), validate(v.upda
 router.delete('/farmers/:farmerId', requireParamUuid('farmerId'), asyncHandler(farmers.remove));
 router.post('/farmers/:farmerId/verify-nin', requireParamUuid('farmerId'), asyncHandler(farmers.verifyNin));
 router.post('/farmers/:farmerId/map-farm', requireParamUuid('farmerId'), validate(v.mapFarm), asyncHandler(farmers.mapFarm));
+
+// Farms within a farmer ("Add Another Farm"). The nested `farm` object on
+// POST/PATCH /farmers still creates and edits the PRIMARY farm; these address
+// a specific one.
+// Satellite basemap for the farm map. The provider key stays on the server —
+// a Maps Static key cannot be restricted to a mobile app, so one shipped in
+// the bundle would be unrestricted and public. See services/satellite.
+router.get('/map/config', asyncHandler(map.mapConfig));
+router.get('/map/satellite', asyncHandler(map.satellite));
+
+router.get('/farmers/:farmerId/farms', requireParamUuid('farmerId'), asyncHandler(farmers.listFarms));
+router.post('/farmers/:farmerId/farms', requireParamUuid('farmerId'), validate(v.createFarm), asyncHandler(farmers.addFarm));
+router.patch('/farmers/:farmerId/farms/:farmId', requireParamUuid('farmerId'), requireParamUuid('farmId'), validate(v.updateFarm), asyncHandler(farmers.updateFarm));
+router.post('/farmers/:farmerId/farms/:farmId/primary', requireParamUuid('farmerId'), requireParamUuid('farmId'), asyncHandler(farmers.setPrimaryFarm));
+router.delete('/farmers/:farmerId/farms/:farmId', requireParamUuid('farmerId'), requireParamUuid('farmId'), asyncHandler(farmers.removeFarm));
 router.get('/farmers/:farmerId/credit-score', requireParamUuid('farmerId'), asyncHandler(farmers.getCreditScore));
 router.get('/farmers/:farmerId/seasonal-yield', requireParamUuid('farmerId'), asyncHandler(productions.farmerSeasonalYield));
 router.get('/farmers/:farmerId/market-access', requireParamUuid('farmerId'), asyncHandler(marketAccess.listByFarmer));
@@ -125,6 +143,16 @@ router.delete('/notifications', asyncHandler(notifications.clearAll));
 router.post('/uploads/sign-url', validate(v.signUrl), asyncHandler(uploads.signUrl));
 router.post('/uploads/:kind', imageUpload.single('file'), asyncHandler(uploads.uploadGeneric));
 router.post('/uploads-doc/:kind', docUpload.single('file'), asyncHandler(uploads.uploadGeneric));
+
+// --- Credit reports (lender-facing document) ---
+router.get('/farmers/:farmerId/credit-report', requireParamUuid('farmerId'), asyncHandler(creditReport.farmerCreditReport));
+router.get('/cooperatives/:cooperativeId/credit-report', requireParamUuid('cooperativeId'), asyncHandler(creditReport.cooperativeCreditReport));
+
+// --- Data consent (mandatory gate before onboarding) ---
+router.post('/consent', validate(v.recordConsent), asyncHandler(consent.recordConsent));
+router.post('/consent/:consentId/verify', requireParamUuid('consentId'), validate(v.verifyConsentOtp), asyncHandler(consent.verifyConsentOtp));
+router.post('/consent/:consentId/resend', requireParamUuid('consentId'), asyncHandler(consent.resendConsentOtp));
+router.get('/consent/:entityType/:entityId', requireParamUuid('entityId'), asyncHandler(consent.getConsentForEntity));
 
 // --- Bulk CSV import ---
 router.post('/imports', csvUpload.single('file'), asyncHandler(imports.bulkImport));

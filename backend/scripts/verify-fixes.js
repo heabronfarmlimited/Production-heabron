@@ -639,7 +639,7 @@ test('email: safe() still never rejects, so a mail failure cannot break a reques
 // ──────────────────────────────────────────────── credit score: pure functions
 const score = require(path.join(SRC, 'services', 'credit-score', 'index.js'));
 
-test('credit score: a negative or NaN yield cannot escape the 0-60 band', () => {
+test('credit score: a negative or NaN yield cannot escape the 0-100 band', () => {
   // `Math.min(actual / benchmark, 1.0)` happily returns a NEGATIVE ratio, so a
   // negative actual yield produced a negative production score and a final
   // score below zero that was then presented as a tier-D assessment.
@@ -647,33 +647,38 @@ test('credit score: a negative or NaN yield cannot escape the 0-60 band', () => 
   assert.deepEqual(score.computeProductionScore({ actualYield: NaN, benchmarkYield: 2 }), { score: 0, yieldRatio: 0 });
   assert.deepEqual(score.computeProductionScore({ actualYield: 5, benchmarkYield: 0 }), { score: 0, yieldRatio: 0 });
 
-  // At or above benchmark is capped at the full 60.
-  assert.equal(score.computeProductionScore({ actualYield: 10, benchmarkYield: 2 }).score, 60);
-  assert.equal(score.computeProductionScore({ actualYield: 1, benchmarkYield: 2 }).score, 30);
+  // At or above benchmark is capped at the full 100 (model v3.0).
+  assert.equal(score.computeProductionScore({ actualYield: 10, benchmarkYield: 2 }).score, 100);
+  assert.equal(score.computeProductionScore({ actualYield: 1, benchmarkYield: 2 }).score, 50);
 });
 
 test('credit score: no repayment evidence scores zero, not full marks', () => {
   // Timeliness and default history both used to DEFAULT to the maximum, so a
   // farmer with a disbursed loan, no due date and no payments banked
   // 0 + 10 + 5 = 15 points for nothing.
-  const bare = score.computeRepaymentScore({ repayments: [], loanAmount: 100000, dueDate: null });
+  const bare = score.computeRepaymentScore({
+    repayments: [],
+    loanAmount: 100000,
+    dueDate: null,
+    priorDefaults: { active: true },
+  });
   assert.equal(bare.components.timeliness, 0, 'an unassessable due date is not punctuality');
-  assert.equal(bare.components.defaultHistory, 0, 'no completed cycle cannot vouch for a clean record');
+  assert.equal(bare.components.defaultHistory, 0, 'an active default scores zero');
   assert.equal(bare.score, 0);
   assert.equal(bare.timelinessBasis, 'no_due_date');
 });
 
-test('credit score: a full on-time repayment earns the whole 40', () => {
+test('credit score: a full on-time repayment earns the whole 100 (model v3.0)', () => {
   const paid = score.computeRepaymentScore({
     repayments: [{ amount_paid: 100000, payment_date: '2026-01-01' }],
     loanAmount: 100000,
     dueDate: '2026-02-01',
-    priorDefaults: { active: false, recoveredCleanCycles: 2 },
+    priorDefaults: { active: false, everDefaulted: false },
   });
-  assert.equal(paid.components.repaymentRate, 25);
-  assert.equal(paid.components.timeliness, 10);
-  assert.equal(paid.components.defaultHistory, 5);
-  assert.equal(paid.score, 40);
+  assert.equal(paid.components.repaymentRate, 60);
+  assert.equal(paid.components.timeliness, 25);
+  assert.equal(paid.components.defaultHistory, 15);
+  assert.equal(paid.score, 100);
 });
 
 test('credit score: a negative amount_paid cannot inflate or NaN the rate', () => {
@@ -713,14 +718,16 @@ test('credit score: a missing due date falls back to disbursement + window', () 
   assert.equal(score.effectiveDueDate({ due_date: null, disbursed_at: null }), null);
 });
 
-test('credit score: tier bands are contiguous and bounded', () => {
+test('credit score: tier bands are contiguous and bounded (model v3.0)', () => {
+  // Bands from the technical specification, sections 5 and 8:
+  //   A 90-100 | B 85-89 | C 75-84 | D 0-74
   assert.equal(score.tierForScore(100), 'A');
-  assert.equal(score.tierForScore(80), 'A');
-  assert.equal(score.tierForScore(79.9), 'B');
-  assert.equal(score.tierForScore(65), 'B');
-  assert.equal(score.tierForScore(64.9), 'C');
-  assert.equal(score.tierForScore(50), 'C');
-  assert.equal(score.tierForScore(49.9), 'D');
+  assert.equal(score.tierForScore(90), 'A');
+  assert.equal(score.tierForScore(89.9), 'B');
+  assert.equal(score.tierForScore(85), 'B');
+  assert.equal(score.tierForScore(84.9), 'C');
+  assert.equal(score.tierForScore(75), 'C');
+  assert.equal(score.tierForScore(74.9), 'D');
   assert.equal(score.tierForScore(0), 'D');
 });
 
@@ -776,4 +783,121 @@ test('storage: every bucket the code writes to is created by the schema', () => 
         `isPublic=${Boolean(spec.isPublic)} for upload kind "${kind}"`
     );
   }
+});
+
+// ──────────────────────────── agent approval: the silent zero-row update
+/**
+ * Loads admin.agents.controller with a stubbed Supabase client so the approval
+ * path can be driven without a database.
+ *
+ * The bug: PostgREST reports NO error when an UPDATE matches no rows. The
+ * approval marked the application approved and sent the "approved" email while
+ * `profiles.status` stayed `pending`, so the admin list kept showing the agent
+ * as pending and the agent kept seeing "Awaiting admin approval".
+ */
+function loadAgentsControllerWithProfileUpdate({ profileRowsUpdated }) {
+  const state = { applicationStatus: 'pending', emailSent: false, rolledBack: false };
+
+  const builder = (table) => {
+    const q = {
+      _table: table,
+      select() { return q; },
+      eq() { return q; },
+      maybeSingle: async () => {
+        if (table === 'agent_applications') {
+          return {
+            data: {
+              id: 'app-1',
+              user_id: 'user-1',
+              email: 'agent@example.com',
+              full_name: 'Ada Nwosu',
+              status: state.applicationStatus,
+            },
+            error: null,
+          };
+        }
+        return { data: null, error: null };
+      },
+      update(patch) {
+        if (table === 'agent_applications') {
+          if (patch.status === 'pending') state.rolledBack = true;
+          else state.applicationStatus = patch.status;
+          return {
+            eq: () => ({ eq: () => ({ select: async () => ({ data: [{ id: 'app-1' }], error: null }) }) }),
+          };
+        }
+        if (table === 'profiles') {
+          // The crux: zero rows, and NO error.
+          return {
+            eq: () => ({
+              select: async () => ({
+                data: profileRowsUpdated ? [{ user_id: 'user-1', status: patch.status }] : [],
+                error: null,
+              }),
+            }),
+          };
+        }
+        return { eq: async () => ({ data: null, error: null }) };
+      },
+      insert: async () => ({ data: null, error: null }),
+    };
+    return q;
+  };
+
+  const controller = loadWithStubs(
+    path.join(SRC, 'controllers', 'admin.agents.controller.js'),
+    {
+      '../config/supabase': { supabaseAdmin: () => ({ from: builder }) },
+      '../utils/logger': silentLogger,
+      '../services/email': {
+        safe: (fn) => fn,
+        sendAgentApproved: async () => { state.emailSent = true; return {}; },
+        sendAgentRejected: async () => { state.emailSent = true; return {}; },
+      },
+      '../utils/activity': { logActivity: async () => {} },
+    }
+  );
+
+  return { controller, state };
+}
+
+function fakeRes() {
+  const res = { statusCode: 200, body: null };
+  res.status = (c) => { res.statusCode = c; return res; };
+  res.json = (b) => { res.body = b; return res; };
+  return res;
+}
+
+test('approval: a profile update matching no rows fails loudly instead of silently', async () => {
+  const { controller, state } = loadAgentsControllerWithProfileUpdate({ profileRowsUpdated: false });
+
+  const res = fakeRes();
+  await controller.decideApplication(
+    { params: { applicationId: 'app-1' }, body: { decision: 'approve' }, user: { userId: 'admin-1' } },
+    res
+  );
+
+  assert.equal(res.body?.success, false, 'the request must not report success');
+  assert.equal(state.rolledBack, true, 'the application must be returned to pending');
+  assert.equal(
+    state.emailSent,
+    false,
+    'the "approved" email must NOT go out when the profile was not activated — ' +
+      'that is what told the agent they were approved while they were still blocked'
+  );
+});
+
+test('approval: a normal approval activates the profile and notifies the agent', async () => {
+  const { controller, state } = loadAgentsControllerWithProfileUpdate({ profileRowsUpdated: true });
+
+  const res = fakeRes();
+  await controller.decideApplication(
+    { params: { applicationId: 'app-1' }, body: { decision: 'approve' }, user: { userId: 'admin-1' } },
+    res
+  );
+
+  assert.equal(res.body?.success, true);
+  assert.equal(state.rolledBack, false);
+  assert.equal(state.emailSent, true);
+  assert.equal(state.applicationStatus, 'active');
 });

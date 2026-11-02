@@ -2,14 +2,13 @@
 
 const { supabaseAdmin } = require('../config/supabase');
 const { signAccessToken, signRefreshToken, verifyToken } = require('../utils/jwt');
-const { generateOtp } = require('../utils/crypto');
+const { createOtp, consumeOtp, OTP_PURPOSES } = require('../services/otp');
 const { ok, created, badRequest, unauthorized, notFound, conflict, serverError } = require('../utils/response');
 const email = require('../services/email');
 const { logActivity } = require('../utils/activity');
 const logger = require('../utils/logger');
 const { ADMIN_ROLES } = require('../middleware/auth');
 
-const OTP_TTL_MIN = 10;
 
 /**
  * Normalize an email the same way the Joi validators do (lowercase + trim).
@@ -18,83 +17,6 @@ const OTP_TTL_MIN = 10;
  */
 function normalizeEmail(e) {
   return String(e || '').toLowerCase().trim();
-}
-
-async function createOtp(emailAddr, purpose) {
-  const sb = supabaseAdmin();
-  const code = generateOtp();
-  const expiresAt = new Date(Date.now() + OTP_TTL_MIN * 60 * 1000).toISOString();
-  const normalized = normalizeEmail(emailAddr);
-
-  // Invalidate prior unconsumed OTPs for the same purpose
-  const { error: updErr } = await sb
-    .from('otp_codes')
-    .update({ consumed: true })
-    .eq('email', normalized)
-    .eq('purpose', purpose)
-    .eq('consumed', false);
-  if (updErr) {
-    // Not fatal on its own, but log loudly. If this is an RLS error it's the
-    // same root cause that will break the insert below.
-    logger.error(
-      { err: updErr.message, code: updErr.code, hint: updErr.hint, details: updErr.details, email: normalized, purpose },
-      'OTP invalidate-previous failed'
-    );
-  }
-
-  const { data, error: insErr } = await sb
-    .from('otp_codes')
-    .insert({ email: normalized, code, purpose, expires_at: expiresAt })
-    .select('id')
-    .single();
-  if (insErr) {
-    logger.error(
-      { err: insErr.message, code: insErr.code, hint: insErr.hint, details: insErr.details, email: normalized, purpose },
-      'OTP insert failed'
-    );
-    throw new Error(`OTP insert failed: ${insErr.message}`);
-  }
-
-  logger.info({ otpId: data.id, email: normalized, purpose }, 'OTP created');
-  return code;
-}
-
-async function consumeOtp(emailAddr, code, purpose) {
-  const sb = supabaseAdmin();
-  const normalized = normalizeEmail(emailAddr);
-
-  // Fetch the latest non-consumed OTP for this email + purpose, then verify
-  // the code in JS so we can distinguish "no OTP at all" from "wrong code".
-  const { data, error } = await sb
-    .from('otp_codes')
-    .select('id, code, expires_at, consumed')
-    .eq('email', normalized)
-    .eq('purpose', purpose)
-    .eq('consumed', false)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    logger.error(
-      { err: error.message, code: error.code, hint: error.hint, details: error.details, email: normalized, purpose },
-      'OTP lookup failed'
-    );
-    return { ok: false, reason: 'lookup_error' };
-  }
-  if (!data) return { ok: false, reason: 'not_found' };
-  if (String(data.code) !== String(code)) return { ok: false, reason: 'invalid' };
-  if (new Date(data.expires_at) < new Date()) return { ok: false, reason: 'expired' };
-
-  const { error: markErr } = await sb
-    .from('otp_codes')
-    .update({ consumed: true })
-    .eq('id', data.id);
-  if (markErr) {
-    logger.error({ err: markErr.message, otpId: data.id }, 'OTP mark-consumed failed');
-    return { ok: false, reason: 'mark_consumed_failed' };
-  }
-  return { ok: true };
 }
 
 function buildAuthPayload(profile, role, partnerId) {
@@ -175,7 +97,7 @@ async function signupStep1(req, res) {
   // on verify.
   let code;
   try {
-    code = await createOtp(normalized, 'signup');
+    code = await createOtp(normalized, OTP_PURPOSES.SIGNUP);
   } catch (e) {
     logger.error({ err: e.message }, 'createOtp threw inside signupStep1');
     return serverError(res, 'Could not create verification code, please try again');
@@ -647,7 +569,7 @@ async function forgotPassword(req, res) {
   }
   let code;
   try {
-    code = await createOtp(normalized, 'password_reset');
+    code = await createOtp(normalized, OTP_PURPOSES.PASSWORD_RESET);
   } catch (e) {
     logger.error({ err: e.message }, 'createOtp threw inside forgotPassword');
     // Still respond OK to avoid leaking that the account exists, but the user
@@ -676,7 +598,7 @@ async function forgotPassword(req, res) {
 
 async function resetPassword(req, res) {
   const { email: emailAddr, code, newPassword } = req.body;
-  const result = await consumeOtp(emailAddr, code, 'password_reset');
+  const result = await consumeOtp(emailAddr, code, OTP_PURPOSES.PASSWORD_RESET);
   if (!result.ok) return badRequest(res, `OTP ${result.reason}`);
 
   const sb = supabaseAdmin();

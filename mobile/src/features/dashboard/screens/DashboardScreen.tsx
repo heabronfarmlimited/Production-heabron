@@ -1,64 +1,149 @@
 /**
  * Dashboard (home tab) — ported from
- * modules/dashboard/presentation/view/dashnoard_view.dart
+ * modules/dashboard/presentation/view/dashnoard_view.dart, then rebuilt for
+ * the v2 user flow.
  *
- * Dart order: 22 space, header, 39 space, two summary cards side by side,
- * 24 space, 'Quick Actions' (12sp), 16 space, the 2x2 action grid, 28 space,
- * 'Recent Activity' (14sp) + 'View All' (10sp primary), 16 space, then up to
- * 10 activity rows or 'No recent activity'.
+ * v2 changes:
  *
- * FIXED — the Dart 'Add farmer' quick action called `onTabSelected(1)`, which
- * is the **Cooperatives** tab (farmers is index 2). It now opens the add-farmer
- * flow directly.
+ *  - Six tiles instead of two summary cards. Three say what has been
+ *    recorded (cooperatives, farmers, land); three say what needs doing
+ *    (farmers with no farm area, records waiting to sync, records that
+ *    failed). The second group is the point of the screen — the old
+ *    dashboard could show a healthy pair of counts while three onboarded
+ *    farmers sat unsynced and two had been rejected hours earlier.
+ *  - Six quick actions instead of four, with "Log delivery" finally opening
+ *    a delivery form. It used to open the Activities tab, which only LISTS
+ *    deliveries; `POST /agent/deliveries` had no screen at all.
+ *  - Recent Activity removed, as the flow specifies. It filled the screen
+ *    below the fold with rows whose subtitle was the agent's own IP address,
+ *    and the full log is still a tap away under the bell or Activity Logs.
+ *  - Online / Offline moved into the header, so it is visible before an
+ *    agent starts a form rather than after the save has been queued.
  *
- * NOTE — 'Log delivery' was `isDisabled: true` with no handler in Dart even
- * though `POST /agent/deliveries` exists. It is wired up here.
- */
-import { useRouter } from 'expo-router';
+ * FIXED (pre-v2, kept) — the Dart 'Add farmer' quick action called
+ * `onTabSelected(1)`, which is the Cooperatives tab; farmers is index 2.
+ */ import { useRouter } from 'expo-router';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { AppSkeleton } from '../../../components/AppSkeleton';
+import { SkeletonTiles } from '../../../components/Skeleton';
 import { routes } from '../../../core/navigation/routes';
 import { colors } from '../../../core/theme/colors';
 import { h, r, spMin } from '../../../core/theme/responsive';
 import { fontWeights, textTheme } from '../../../core/theme/typography';
-import { formatDateAndTime, titleCase } from '../../../core/utils/format';
-import { ActionCard, ActivityItem, SummaryCard } from '../components/DashboardCards';
+import {
+  useNetworkStatus,
+  useOfflineFarmerQueue,
+} from '../../farmers/hooks/useOfflineFarmerQueue';
+import { ActionCard, StatTile } from '../components/DashboardCards';
 import { DashboardHeader } from '../components/DashboardHeader';
 import { useDashboard } from '../hooks/useDashboard';
 
 export function DashboardScreen() {
   const router = useRouter();
   const { data, isLoading, isRefetching, refresh } = useDashboard();
+  const { pending, waiting, failed } = useOfflineFarmerQueue();
+  const { isConnected } = useNetworkStatus();
 
-  const activity = (data?.recentActivity ?? []).slice(0, 10);
+  const land = data?.land ?? null;
+  // Both gaps count as "needs a farm area": no farm record at all, and farm
+  // records with no acreage. Either way the farmer cannot be scored.
+  const needArea = land ? land.farmersWithoutArea + land.farmersWithoutFarms : 0;
 
   return (
-    <AppSkeleton isBusy={isLoading} backgroundColor={colors.background}>
+    <AppSkeleton backgroundColor={colors.background}>
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl refreshing={isRefetching} onRefresh={refresh} />
-        }
+        refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refresh} />}
         contentContainerStyle={styles.content}
       >
         <View style={{ height: h(22) }} />
 
         <DashboardHeader />
 
-        <View style={{ height: h(39) }} />
+        <View style={{ height: h(28) }} />
 
-        <View style={styles.summaryRow}>
-          <SummaryCard
-            title="Cooperatives registered"
-            count={String(data?.cooperatives ?? 0)}
-          />
-          <View style={{ width: r(16) }} />
-          <SummaryCard
-            title="Farmers registered"
-            count={String(data?.farmers ?? 0)}
-          />
-        </View>
+        {/*
+          ── What has been recorded, and what needs doing ───────────
+
+          Only the TILES wait: the greeting comes from the auth store and
+          the quick actions work before any request has returned, so
+          blocking the whole screen (which `isBusy` did) hid a usable header
+          and six working buttons behind a spinner.
+        */}
+        {isLoading && !data ? (
+          <SkeletonTiles rows={2} perRow={3} />
+        ) : (
+          <>
+            <View style={styles.tileRow}>
+              <StatTile
+                label="Cooperatives"
+                value={String(data?.cooperatives ?? 0)}
+                onPress={() => router.push(routes.cooperativesTab)}
+                testID="tile-cooperatives"
+              />
+              <View style={{ width: r(10) }} />
+              <StatTile
+                label="Farmers"
+                value={String(data?.farmers ?? 0)}
+                onPress={() => router.push(routes.farmersTab)}
+                testID="tile-farmers"
+              />
+              <View style={{ width: r(10) }} />
+              <StatTile
+                label="Acres recorded"
+                value={land ? String(land.totalLandAcres) : '—'}
+                caption={
+                  land && land.farmCount > 0
+                    ? `${land.farmCount} farm${land.farmCount === 1 ? '' : 's'}`
+                    : undefined
+                }
+                testID="tile-land"
+              />
+            </View>
+
+            <View style={{ height: h(10) }} />
+
+            <View style={styles.tileRow}>
+              {/*
+            A farmer with a farm record but no acreage cannot be
+            credit-scored — land is the denominator of the production score.
+            It is work outstanding, not a statistic, so it is a tile rather
+            than a number buried on a report.
+          */}
+              <StatTile
+                label="Need farm area"
+                value={
+                  land ? String(land.farmersWithoutArea + land.farmersWithoutFarms) : '—'
+                }
+                caption={needArea > 0 ? 'Cannot be scored' : undefined}
+                tone={needArea > 0 ? 'attention' : 'neutral'}
+                onPress={() => router.push(routes.farmersTab)}
+                testID="tile-need-area"
+              />
+              <View style={{ width: r(10) }} />
+              <StatTile
+                label="Waiting to sync"
+                value={String(waiting.length)}
+                caption={
+                  waiting.length > 0 ? (isConnected ? 'Syncing' : 'Offline') : undefined
+                }
+                tone={waiting.length > 0 ? 'attention' : 'neutral'}
+                onPress={() => router.push(routes.syncQueue)}
+                testID="tile-waiting"
+              />
+              <View style={{ width: r(10) }} />
+              <StatTile
+                label="Failed to sync"
+                value={String(failed.length)}
+                caption={failed.length > 0 ? 'Tap to retry' : undefined}
+                tone={failed.length > 0 ? 'problem' : 'neutral'}
+                onPress={() => router.push(routes.syncQueue)}
+                testID="tile-failed"
+              />
+            </View>
+          </>
+        )}
 
         <View style={{ height: h(24) }} />
 
@@ -84,6 +169,27 @@ export function DashboardScreen() {
           <View style={{ height: h(16) }} />
 
           <View style={styles.actionsRow}>
+            {/*
+              Both of these need a farmer chosen first, so they open the
+              farmers list rather than a form with an empty subject. The
+              Update Record hub then sits on the farmer.
+            */}
+            <ActionCard
+              icon={<Text style={styles.actionGlyph}>🌾</Text>}
+              title="Update record"
+              onPress={() => router.push(routes.farmersTab)}
+            />
+            <View style={{ width: r(10) }} />
+            <ActionCard
+              icon={<Text style={styles.actionGlyph}>🚚</Text>}
+              title="Log delivery"
+              onPress={() => router.push(routes.farmersTab)}
+            />
+          </View>
+
+          <View style={{ height: h(16) }} />
+
+          <View style={styles.actionsRow}>
             <ActionCard
               icon={<Text style={styles.actionGlyph}>📤</Text>}
               title="Upload CSV"
@@ -91,43 +197,12 @@ export function DashboardScreen() {
             />
             <View style={{ width: r(10) }} />
             <ActionCard
-              icon={<Text style={styles.actionGlyph}>🚚</Text>}
-              title="Log delivery"
-              onPress={() => router.push(routes.activitiesTab)}
+              icon={<Text style={styles.actionGlyph}>🔄</Text>}
+              title={pending.length > 0 ? `Sync (${pending.length})` : 'Sync records'}
+              onPress={() => router.push(routes.syncQueue)}
             />
           </View>
         </View>
-
-        <View style={{ height: h(28) }} />
-
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Recent Activity</Text>
-          <Text
-            style={styles.viewAll}
-            accessibilityRole="link"
-            onPress={() => router.push(routes.activityLogs)}
-          >
-            View All
-          </Text>
-        </View>
-
-        <View style={{ height: h(16) }} />
-
-        {activity.length === 0 ? (
-          <View style={styles.empty}>
-            <Text style={styles.emptyText}>No recent activity</Text>
-          </View>
-        ) : (
-          activity.map((item, index) => (
-            <ActivityItem
-              key={item.id || `${item.action}-${index}`}
-              title={titleCase(item.action)}
-              subtitle={item.ipAddress ?? 'N/A'}
-              time={formatDateAndTime(item.createdAt)}
-              isLast={index === activity.length - 1}
-            />
-          ))
-        )}
 
         <View style={{ height: h(24) }} />
       </ScrollView>
@@ -139,7 +214,7 @@ const styles = StyleSheet.create({
   content: {
     paddingBottom: r(24),
   },
-  summaryRow: {
+  tileRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
   },
@@ -158,29 +233,5 @@ const styles = StyleSheet.create({
   },
   actionGlyph: {
     fontSize: spMin(20),
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  sectionTitle: {
-    ...textTheme.titleMedium,
-    fontSize: spMin(14),
-    fontFamily: fontWeights.regular,
-    fontWeight: '400',
-  },
-  viewAll: {
-    ...textTheme.bodyMedium,
-    fontSize: spMin(10),
-    color: colors.primary,
-  },
-  empty: {
-    alignItems: 'center',
-    paddingVertical: r(32),
-  },
-  emptyText: {
-    ...textTheme.bodyMedium,
-    color: colors.grey,
   },
 });

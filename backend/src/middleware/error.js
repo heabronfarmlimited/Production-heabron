@@ -30,6 +30,65 @@ const PG_STATUS = {
 };
 
  
+/**
+ * Unique constraints worth naming.
+ *
+ * A 23505 reaching the client as "That record already exists" is true and
+ * useless: the agent is looking at a form of fifteen fields and is not told
+ * which one collided. The flow's exception list calls out duplicate
+ * registration number specifically, and the constraint name is right there in
+ * the Postgres message — so it is translated into the field the agent must
+ * change, in the camelCase the form uses, which lets the app highlight the
+ * field through `applyServerFieldErrors` instead of only toasting.
+ *
+ * Keyed by constraint name; anything not listed keeps the generic message.
+ */
+const UNIQUE_CONSTRAINTS = {
+  cooperatives_registration_number_key: {
+    field: 'registrationNumber',
+    message:
+      'A cooperative with that registration number already exists. Check the number, or open the existing cooperative instead of registering it again.',
+  },
+  profiles_user_id_key: {
+    field: null,
+    message: 'That account already has a profile.',
+  },
+  partners_organization_email_key: {
+    field: 'organizationEmail',
+    message: 'A partner with that organisation email already exists.',
+  },
+  uq_farm_profiles_one_primary: {
+    field: null,
+    message:
+      'That farmer already has a main farm. Promote the new one instead of adding a second main farm.',
+  },
+  uq_consent_one_active: {
+    field: null,
+    message: 'That record already has an active consent. Withdraw it before recording another.',
+  },
+  yield_benchmarks_crop_state_lga_season_key: {
+    field: null,
+    message: 'A benchmark already exists for that crop, state, LGA and season.',
+  },
+};
+
+/**
+ * Pulls the constraint name out of a Postgres unique-violation.
+ *
+ * Postgres puts it in `constraint`, but PostgREST does not always pass that
+ * through — it often arrives only inside the message or details text, as
+ * `duplicate key value violates unique constraint "..."`. Both are checked
+ * rather than relying on the structured field that may not be there.
+ */
+function uniqueConstraintName(err) {
+  if (typeof err?.constraint === 'string' && err.constraint.length > 0) {
+    return err.constraint;
+  }
+  const text = `${err?.message || ''} ${err?.details || ''}`;
+  const match = /unique constraint "([^"]+)"/.exec(text);
+  return match ? match[1] : null;
+}
+
 function errorHandler(err, req, res, next) {
   // Multer file size / count / type errors
   if (err && err.code === 'LIMIT_FILE_SIZE') {
@@ -64,6 +123,24 @@ function errorHandler(err, req, res, next) {
     },
     'unhandled error'
   );
+
+  if (err && err.code === '23505') {
+    const constraint = uniqueConstraintName(err);
+    const known = constraint ? UNIQUE_CONSTRAINTS[constraint] : null;
+    if (known) {
+      // `details` must be the ARRAY the client parses into field errors —
+      // `fail` assigns it straight to `error.details`, and the app's
+      // `AppError` only reads it when `Array.isArray`. Wrapping it in an
+      // object would leave the field unmarked and the message toast-only.
+      return fail(
+        res,
+        409,
+        'CONFLICT',
+        known.message,
+        known.field ? [{ field: known.field, message: known.message }] : undefined
+      );
+    }
+  }
 
   if (mapped) {
     const [status, code, message] = mapped;

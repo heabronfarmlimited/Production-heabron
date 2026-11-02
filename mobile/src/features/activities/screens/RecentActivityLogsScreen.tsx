@@ -29,6 +29,7 @@ import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 
 import { AppSkeleton } from '../../../components/AppSkeleton';
 import { AppTextField } from '../../../components/AppTextField';
+import { SkeletonList } from '../../../components/Skeleton';
 import { colors } from '../../../core/theme/colors';
 import { h, r, spMin } from '../../../core/theme/responsive';
 import { fontWeights, textTheme } from '../../../core/theme/typography';
@@ -56,7 +57,7 @@ export function RecentActivityLogsScreen() {
 
   return (
     <AppSkeleton
-      isBusy={isLoading && logs.length === 0}
+      firstLoad={isLoading && logs.length === 0 ? <SkeletonList /> : null}
       backgroundColor={colors.background}
       bodyPadding={styles.bodyPadding}
     >

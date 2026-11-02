@@ -50,6 +50,24 @@ export function showApiError(err: unknown, fallback?: unknown): void {
 
 const DEFAULT_ERROR = 'Something went wrong.';
 
+/**
+ * The same message `showApiError` would show, as a string.
+ *
+ * For storing a failure against a record rather than only toasting it — the
+ * offline queue keeps the reason a sync failed so the agent can still see it
+ * after the toast has gone.
+ */
+export function errorMessage(err: unknown, fallback = DEFAULT_ERROR): string {
+  const error = AppError.from(err);
+  const first = error.details[0];
+  if (first) {
+    const extra =
+      error.details.length > 1 ? ` (+${error.details.length - 1} more)` : '';
+    return `${first.field ? `${first.field}: ` : ''}${first.message}${extra}`;
+  }
+  return error.message || fallback;
+}
+
 /** Builds an `onError` handler with a custom fallback message. */
 export const apiErrorHandler =
   (fallback: string) =>
@@ -67,5 +85,6 @@ export const toast = {
   showError,
   showInfo,
   showApiError,
+  errorMessage,
   apiErrorHandler,
 } as const;

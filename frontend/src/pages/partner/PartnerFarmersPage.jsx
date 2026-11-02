@@ -7,7 +7,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Card, TierPill, EmptyState, Skeleton, StatusPill } from '@/components/ui/Card';
 import { Input, Select } from '@/components/ui/Input';
 import { Pagination } from '@/components/ui/DataTable';
-import { initials, formatScore } from '@/lib/utils';
+import { initials, formatScore, primaryFarm } from '@/lib/utils';
 
 const PAGE_SIZE = 25;
 
@@ -120,9 +120,12 @@ export default function PartnerFarmersPage() {
                   // The API shapes these joins into `farm` / `creditScore`
                   // (camelCase) and keeps the raw snake_case arrays for
                   // back-compat; prefer the contract fields and fall back.
-                  const rawFarm = Array.isArray(f.farm_profiles) ? f.farm_profiles[0] : f.farm_profiles;
+                  // A farmer may hold several farms, so the crop comes from
+                  // the whole set rather than one arbitrary row —
+                  // `farm_profiles[0]` is unordered and could differ between
+                  // page loads.
                   const rawScore = Array.isArray(f.credit_scores) ? f.credit_scores[0] : f.credit_scores;
-                  const crop = f.farm?.cropType ?? rawFarm?.crop_type;
+                  const crop = f.farm?.cropType ?? primaryFarm(f)?.crop_type;
                   const tierValue = f.creditScore?.creditTier ?? rawScore?.credit_tier ?? f.credit_tier;
                   const scoreValue = f.creditScore?.finalCreditScore ?? rawScore?.final_credit_score ?? f.credit_score;
                   return (

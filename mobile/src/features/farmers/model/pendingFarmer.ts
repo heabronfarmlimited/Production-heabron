@@ -27,6 +27,21 @@ export interface PendingFarmer {
   localFarmPhotoPaths: string[];
   /** Not in the Dart DTO — lets the UI show when a record was queued. */
   queuedAt: string;
+  /**
+   * How many times a sync has been attempted for this record, and why the
+   * last one failed.
+   *
+   * Without these, a record that keeps failing — a duplicate registration
+   * number, a validation error the form let through, an expired session —
+   * looked exactly like one that was merely waiting for a signal. The agent
+   * had no way to tell that something needed their attention, and the only
+   * sign was a toast that had long since gone. The home screen now counts
+   * "waiting to sync" and "failed to sync" separately, which is only possible
+   * because the failure is recorded against the entry.
+   */
+  attempts: number;
+  lastError: string | null;
+  lastAttemptAt: string | null;
 }
 
 export function parsePendingFarmer(raw: unknown): PendingFarmer {
@@ -45,6 +60,16 @@ export function parsePendingFarmer(raw: unknown): PendingFarmer {
       : null,
     localFarmPhotoPaths: strList(p.localFarmPhotoPaths),
     queuedAt: str(p.queuedAt, new Date(0).toISOString()),
+    // Entries queued before this field existed read as never-attempted,
+    // which is the safe reading: they are shown as waiting, and the first
+    // sync records the truth.
+    attempts: typeof p.attempts === 'number' && Number.isFinite(p.attempts)
+      ? Math.max(0, Math.trunc(p.attempts))
+      : 0,
+    lastError: typeof p.lastError === 'string' && p.lastError.length > 0
+      ? p.lastError
+      : null,
+    lastAttemptAt: typeof p.lastAttemptAt === 'string' ? p.lastAttemptAt : null,
   };
 }
 
@@ -57,7 +82,24 @@ export function serializePendingFarmer(p: PendingFarmer): Record<string, unknown
     localLandDocumentPath: p.localLandDocumentPath ?? null,
     localFarmPhotoPaths: p.localFarmPhotoPaths,
     queuedAt: p.queuedAt,
+    attempts: p.attempts,
+    lastError: p.lastError,
+    lastAttemptAt: p.lastAttemptAt,
   };
+}
+
+/** True when the last sync attempt for this record failed. */
+export const pendingFarmerFailed = (p: PendingFarmer): boolean =>
+  p.lastError != null && p.attempts > 0;
+
+/** Splits the queue into what is waiting and what needs attention. */
+export function splitPendingFarmers(queue: PendingFarmer[]): {
+  waiting: PendingFarmer[];
+  failed: PendingFarmer[];
+} {
+  const failed = queue.filter(pendingFarmerFailed);
+  const waiting = queue.filter((p) => !pendingFarmerFailed(p));
+  return { waiting, failed };
 }
 
 /** The display name shown in the pending-uploads list. */
@@ -101,6 +143,43 @@ export const pendingFarmerStore = {
     return next;
   },
 
+  /**
+   * Records the outcome of a sync attempt against one entry.
+   *
+   * Called on failure only — a success removes the entry instead. The
+   * attempt count is kept so a repeatedly failing record can be told apart
+   * from one that has only just been tried.
+   */
+  recordFailure(id: string, message: string): PendingFarmer[] {
+    const next = this.all().map((p) =>
+      p.id === id
+        ? {
+            ...p,
+            attempts: p.attempts + 1,
+            lastError: message,
+            lastAttemptAt: new Date().toISOString(),
+          }
+        : p,
+    );
+    this.replaceAll(next);
+    return next;
+  },
+
+  /**
+   * Clears the failure on an entry so it is shown as waiting again.
+   *
+   * Used by "Retry": without it a record that then failed for a transient
+   * reason would keep its old, now misleading, error message while the
+   * retry was in flight.
+   */
+  clearFailure(id: string): PendingFarmer[] {
+    const next = this.all().map((p) =>
+      p.id === id ? { ...p, lastError: null } : p,
+    );
+    this.replaceAll(next);
+    return next;
+  },
+
   replaceAll(list: PendingFarmer[]): void {
     storage.writeJson(
       storage.keys.pendingFarmers,
@@ -139,5 +218,8 @@ export function buildPendingFarmer(input: {
     localLandDocumentPath: input.landDocumentUri ?? null,
     localFarmPhotoPaths: input.farmPhotoUris ?? [],
     queuedAt: new Date().toISOString(),
+    attempts: 0,
+    lastError: null,
+    lastAttemptAt: null,
   };
 }

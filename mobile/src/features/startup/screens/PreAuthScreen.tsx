@@ -7,8 +7,9 @@
  * 24r top corners holds 32 space, 'Sign up' (filled), 16 space, 'Log in'
  * (outlined, bg `#F9FAFB`, outline `#D1D5DB`, text `greyDeep`), 32 space.
  */
+import { Image, ImageBackground } from 'expo-image';
 import { useRouter } from 'expo-router';
-import { Image, ImageBackground, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppButton } from '../../../components/AppButton';
@@ -29,7 +30,7 @@ export function PreAuthScreen() {
       <ImageBackground
         source={images.authBg}
         style={styles.background}
-        resizeMode="cover"
+        contentFit="cover"
       >
         <SafeAreaView style={styles.flex} edges={['top']}>
           <View style={styles.body}>
@@ -37,7 +38,7 @@ export function PreAuthScreen() {
             <Image
               source={images.preAuthIconCenter}
               style={styles.hero}
-              resizeMode="contain"
+              contentFit="contain"
             />
           </View>
         </SafeAreaView>

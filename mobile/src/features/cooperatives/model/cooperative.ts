@@ -101,10 +101,25 @@ export interface Cooperative {
   lga: string;
   address: string;
   /**
-   * FIXED — the Dart DTO coerced this with `.toInt()`, so a cooperative stored
-   * with 4.5 acres read back as 4. The validator is `Joi.number().min(0)`.
+   * Land across the cooperative, DERIVED from the farms of linked farmers.
+   *
+   * The v2 user flow retired the agent-entered estimate ("Do not show or ask
+   * for cooperative land size... Land total is derived from eligible linked
+   * farmer farm records"). The server returns it under `land` on the detail
+   * endpoint and blanks the old `estimated_land_size` column, so this is null
+   * in list responses, where no total is computed — a screen showing it must
+   * handle null rather than printing 0 acres for a cooperative with land.
    */
-  estimatedLandSize: number;
+  land: CooperativeLand | null;
+  /**
+   * The cooperative's main crop (v2 flow: "exactly one primary crop with
+   * secondaries that cannot duplicate it").
+   *
+   * `cooperatives.primary_crop` existed in the schema and was read by the
+   * credit report, but no endpoint wrote it — it was missing from the
+   * validator — so it was NULL for every cooperative. It is collected now.
+   */
+  primaryCrop: string;
   cooperativeTier: string;
   averageCreditScore: number;
   totalMembers: number;
@@ -117,6 +132,30 @@ export interface Cooperative {
   gpsPolygon: GpsPolygon[];
   /** Live counts from `GET /agent/cooperatives/:id` only — null in lists. */
   stats: CooperativeStats | null;
+}
+
+/**
+ * The cooperative's derived land figures, from `GET /agent/cooperatives/:id`.
+ *
+ * `membersWithoutFarms` is the actionable number: it is how an agent sees
+ * that eleven of forty members still have no farm recorded.
+ */
+export interface CooperativeLand {
+  totalLandAcres: number;
+  farmCount: number;
+  membersWithFarms: number;
+  membersWithoutFarms: number;
+}
+
+function parseCooperativeLand(raw: unknown): CooperativeLand | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const l = raw as Record<string, unknown>;
+  return {
+    totalLandAcres: num(l.total_land_acres),
+    farmCount: num(l.farm_count),
+    membersWithFarms: num(l.members_with_farms),
+    membersWithoutFarms: num(l.members_without_farms),
+  };
 }
 
 /** Dart default when `cooperative_tier` is absent. */
@@ -136,7 +175,8 @@ export function parseCooperative(raw: unknown): Cooperative {
     state: str(c.state),
     lga: str(c.lga),
     address: str(c.address),
-    estimatedLandSize: num(c.estimated_land_size),
+    land: parseCooperativeLand(c.land),
+    primaryCrop: str(c.primary_crop),
     cooperativeTier: str(c.cooperative_tier, DEFAULT_COOPERATIVE_TIER),
     averageCreditScore: num(c.average_credit_score),
     totalMembers: num(c.total_members),
@@ -185,11 +225,14 @@ export function toCooperativeBody(
   const body: Record<string, unknown> = {
     name: form.name.trim(),
     registrationNumber: form.registrationNumber.trim(),
+    primaryCrop: form.primaryCrop,
+    // The server rejects a secondary crop that repeats the primary, so the
+    // selector excludes it rather than letting the agent pick a value that
+    // comes back as a 422.
     cropsSupported: form.cropsSupported,
     state: form.state,
     lga: form.lga,
     address: form.address.trim(),
-    estimatedLandSize: Number(form.estimatedLandSize),
   };
 
   const leaderName = leader.name?.trim();
@@ -229,8 +272,8 @@ export function cooperativeToForm(c: Cooperative): CooperativeForm {
     state: c.state,
     lga: c.lga,
     address: c.address,
+    primaryCrop: c.primaryCrop,
     cropsSupported: [...c.cropsSupported],
-    estimatedLandSize: c.estimatedLandSize > 0 ? String(c.estimatedLandSize) : '',
     gpsLat: c.gpsLat != null ? String(c.gpsLat) : '',
     gpsLng: c.gpsLng != null ? String(c.gpsLng) : '',
     logoUrl: c.logoUrl ?? '',
@@ -245,8 +288,8 @@ export const emptyCooperativeForm = (): CooperativeForm => ({
   state: '',
   lga: '',
   address: '',
+  primaryCrop: '',
   cropsSupported: [],
-  estimatedLandSize: '',
   gpsLat: '',
   gpsLng: '',
   logoUrl: '',

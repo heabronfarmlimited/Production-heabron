@@ -21,10 +21,12 @@ import { Controller, useForm } from 'react-hook-form';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AppButton } from '../../../components/AppButton';
+import { AppDropdown } from '../../../components/AppDropdown';
 import { AppSkeleton } from '../../../components/AppSkeleton';
 import { AppTextField } from '../../../components/AppTextField';
 import { AppBackButton } from '../../../components/BaseAppBar';
 import { StateLgaDropdown } from '../../../components/StateLgaDropdown';
+import { CROPS } from '../../../core/api/domainConstants';
 import { useLocation } from '../../../core/hooks/useLocation';
 import { useImageField } from '../../../core/hooks/useMediaPicker';
 import { colors } from '../../../core/theme/colors';
@@ -42,7 +44,8 @@ const SERVER_FIELDS = [
   'state',
   'lga',
   'address',
-  'estimatedLandSize',
+  'primaryCrop',
+  'cropsSupported',
   'gpsLat',
   'gpsLng',
   'logoUrl',
@@ -100,6 +103,8 @@ export function CooperativeFormScreen({
   const { fetchLocation, loading: locating } = useLocation();
 
   const state = watch('state');
+  const primaryCrop = watch('primaryCrop');
+  const cropsSupported = watch('cropsSupported');
   const lga = watch('lga');
 
   /**
@@ -209,13 +214,45 @@ export function CooperativeFormScreen({
 
       <View style={{ height: h(20) }} />
 
+      {/*
+        v2: exactly one primary crop, then the others. The cooperative's
+        primary crop is what its members are benchmarked on, and it was
+        never collected before — `cooperatives.primary_crop` was NULL for
+        every cooperative while the credit report read it.
+      */}
+      <AppDropdown
+        title="Primary crop"
+        label="Select the main crop"
+        options={CROPS}
+        value={primaryCrop.length > 0 ? primaryCrop : null}
+        hasRequired
+        onChange={(value) => {
+          setValue('primaryCrop', value, { shouldValidate: true });
+          // Picking a primary that is already among the secondaries would
+          // leave the form invalid with nothing obviously wrong on screen,
+          // so the duplicate is dropped from the secondaries instead.
+          const deduped = cropsSupported.filter(
+            (crop) => crop.trim().toLowerCase() !== value.trim().toLowerCase(),
+          );
+          if (deduped.length !== cropsSupported.length) {
+            setValue('cropsSupported', deduped, { shouldValidate: true });
+          }
+        }}
+        error={errors.primaryCrop?.message}
+        testID="cooperative-primary-crop"
+      />
+
+      <View style={{ height: h(20) }} />
+
       <Controller
         control={control}
         name="cropsSupported"
         render={({ field }) => (
           <CropTypeSelector
+            title="Other crops supported"
             value={field.value}
             onChange={field.onChange}
+            exclude={primaryCrop ? [primaryCrop] : []}
             error={errors.cropsSupported?.message}
           />
         )}
@@ -223,24 +260,12 @@ export function CooperativeFormScreen({
 
       <View style={{ height: h(20) }} />
 
-      <Controller
-        control={control}
-        name="estimatedLandSize"
-        render={({ field }) => (
-          <AppTextField
-            title="Estimated land size in acres"
-            hintText="Enter land size in acres"
-            keyboardType="decimal-pad"
-            value={field.value}
-            // Decimals are kept: the validator is `Joi.number().min(0)`, and
-            // the Dart form parsed this with `int.tryParse`, turning 4.5 into 0.
-            onChangeText={(text) => field.onChange(text.replace(/[^0-9.]/g, ''))}
-            onBlur={field.onBlur}
-            error={errors.estimatedLandSize?.message}
-            testID="cooperative-land-size"
-          />
-        )}
-      />
+      {/*
+        REMOVED (v2 user flow, "Register Cooperative"): "Do not show or ask
+        for cooperative land size." The total is derived from the farms of
+        linked farmers and shown on the detail screen, so an agent is no
+        longer asked to estimate a number nothing checks.
+      */}
 
       <View style={{ height: h(20) }} />
 

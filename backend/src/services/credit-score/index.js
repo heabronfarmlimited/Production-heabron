@@ -1,28 +1,39 @@
 'use strict';
 
 /**
- * Heabron Credit Score Engine — v2.1  (Yield 60 / Repayment 40)
+ * Heabron Credit Score Engine — v3.0
  *
- *   Final Credit Score = Yield Performance (0-60) + Repayment (0-40)
+ * Implements "Heabron Credit Score System — Technical Specification &
+ * Methodology" v1.0. Two independent scores, each out of 100, averaged:
  *
- *   Yield Performance (0-60)
- *     = clamp(actual_yield_per_ha / benchmark_yield_per_ha, 0, 1) * 60
+ *   Production Score (0-100)   — can this farmer produce consistently?
+ *     = min(actual_yield / benchmark_yield, 1.0) * 100
+ *     Benchmark is set per crop, LGA and season from cooperative history plus
+ *     extension data, so a farmer is measured against their own community
+ *     rather than a national average.
  *
- *   Repayment (0-40), broken down exactly as the admin UI shows it:
- *     Repayment Rate     0-25   = clamp(total_paid / principal, 0, 1) * 25
- *     Timeliness         0-10   = on-time 10 | <=30d late 8 | >30d late 2
- *                                 (context-flagged late = not penalised -> 10)
- *                                 (no assessable due date -> 0, see below)
- *     Default History    0-5    = no defaults 5 | recovered>=2 cycles 5
- *                                 | recovered 1 cycle 3 | active default 0
+ *   Repayment Score (0-100)    — does this farmer honour obligations?
+ *     Repayment Rate    0-60   = clamp(total_paid / principal, 0, 1) * 60
+ *     Timeliness        0-25   = on time 25 | <=30d late 20 | >30d late 5
+ *                                (context-flagged late -> not penalised)
+ *                                (no assessable due date -> 0)
+ *     Default History   0-15   = no defaults 15 | recovered 8 | active 0
  *
- *   First cycle (no disbursed/completed loan yet): score = Yield only.
- *     A farmer can therefore reach at most 60 (Tier C/"Risk") on yield alone;
- *     Tiers B and A require a proven repayment record.
+ *   Final Credit Score = (Production + Repayment) / 2, truncated to one
+ *     decimal — truncated, not rounded, so a score cannot be inflated across a
+ *     tier boundary (spec section 4).
  *
- *   Tier bands — adopted to match the live grade display (100->A, 65->B,
- *   60->C "Risk", 40/46->D "High Risk"). Tune TIER_THRESHOLDS in one place if
- *   the team wants the older spec bands (A90/B85/C75) back.
+ *   Tiers: A 90-100 | B 85-89 | C 75-84 | D 0-74
+ *
+ *   First cycle (no disbursed/completed loan yet): Production only, capped at
+ *     84 so a new borrower cannot reach Tier A or B limits before showing any
+ *     repayment behaviour (spec section 7).
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * v3.0 — replaces v2.1 (Yield 60 / Repayment 40, tiers A80/B65/C50), which
+ * predated this specification. Scores and tiers MOVE on the first
+ * recalculation after this ships; `model_version` distinguishes them in
+ * `credit_score_history` so the two are never compared as like for like.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * v2.1 — audit corrections. Each is marked `FIXED —` at the site.
@@ -36,7 +47,7 @@
  *   • Timeliness and default history defaulted to full marks on no evidence.
  *   • The repayment rate was measured against `loan_amount` (what was asked
  *     for) rather than what was actually approved/disbursed.
- *   • A negative or NaN yield escaped the 0-60 band and the final score escaped
+ *   • A negative or NaN yield escaped its band and the final score escaped
  *     0-100.
  *   • The cooperative average was computed from at most 1000 member rows and
  *     poisoned by a single NULL score.
@@ -45,21 +56,49 @@
 const { supabaseAdmin } = require('../../config/supabase');
 const { fetchAllRows } = require('../../utils/pagination');
 const { chunk } = require('../../utils/profiles');
+const { summarizeFarms } = require('../farms');
 const logger = require('../../utils/logger');
 
-const MODEL_VERSION = 'v2.1';
+const MODEL_VERSION = 'v3.0';
 
-// Component weights (kept as named constants so the model is auditable).
-const YIELD_MAX = 60;
-const REPAYMENT_MAX = 40;
-const REPAY_RATE_MAX = 25;
-const REPAY_TIMELINESS_MAX = 10;
-const REPAY_DEFAULT_MAX = 5;
-const SCORE_MAX = YIELD_MAX + REPAYMENT_MAX; // 100
+/**
+ * Component weights, from the technical specification.
+ *
+ * Two independent scores, each out of 100, averaged into the final:
+ *
+ *   Production Score  = min(actual yield / benchmark yield, 1.0) x 100
+ *   Repayment Score   = Repayment Rate (60) + Timeliness (25) + Defaults (15)
+ *   Final             = (Production + Repayment) / 2
+ */
+const PRODUCTION_MAX = 100;
+const REPAYMENT_MAX = 100;
+const REPAY_RATE_MAX = 60;
+const SCORE_MAX = 100;
 
-// Tier thresholds (inclusive lower bound). Evidence-based from the live UI.
-//   Spec-original alternative: A:90, B:85, C:75  (swap if preferred)
-const TIER_THRESHOLDS = { A: 80, B: 65, C: 50 };
+/** Timeliness bands (spec 3.2B). */
+const TIMELINESS_ON_TIME = 25;
+const TIMELINESS_LATE_30 = 20;
+const TIMELINESS_LATE_OVER_30 = 5;
+
+/** Default-history levels (spec 3.2C). Three levels, so a recovered
+ *  defaulter can rehabilitate rather than being marked for life. */
+const DEFAULT_NONE = 15;
+const DEFAULT_RECOVERED = 8;
+const DEFAULT_ACTIVE = 0;
+/** Clean cycles required after a default before the recovered score applies. */
+const RECOVERY_CLEAN_CYCLES = 2;
+
+/** Tier thresholds, inclusive lower bound (spec section 5). */
+const TIER_THRESHOLDS = { A: 90, B: 85, C: 75 };
+
+/**
+ * First-cycle ceiling (spec section 7).
+ *
+ * A farmer with no repayment history is scored on production alone and held at
+ * the top of Tier C until a repayment exists, so a first-cycle farmer cannot
+ * reach Tier A or B limits before showing any repayment behaviour.
+ */
+const FIRST_CYCLE_SCORE_CAP = 84;
 
 const ACRES_TO_HECTARES = 0.404686;
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
@@ -136,7 +175,7 @@ function effectiveDueDate(financing) {
 }
 
 /**
- * Yield Performance — returns points on the 0-60 scale.
+ * Production Score — points on the 0-100 scale (spec section 2).
  * (Field name `score` is retained for backwards compatibility with callers.)
  */
 function computeProductionScore({ actualYield, benchmarkYield }) {
@@ -149,22 +188,24 @@ function computeProductionScore({ actualYield, benchmarkYield }) {
   if (!Number.isFinite(actual) || !Number.isFinite(benchmark) || benchmark <= 0 || actual <= 0) {
     return { score: 0, yieldRatio: 0 };
   }
+  // The ratio is capped at 1.0: beating the benchmark does not score above
+  // 100, so an over-performing season cannot offset a weak one (spec 2.2).
   const ratio = clamp(actual / benchmark, 0, 1);
   return {
-    score: truncateOneDecimal(ratio * YIELD_MAX),
+    score: truncateOneDecimal(ratio * PRODUCTION_MAX),
     yieldRatio: Number(ratio.toFixed(4)),
   };
 }
 
 /**
- * Repayment — returns points on the 0-40 scale with the Rate/Time/Default
- * sub-breakdown the admin UI renders (Rate /25, Time /10, Def /5).
+ * Repayment Score — points on the 0-100 scale with the Rate/Time/Default
+ * sub-breakdown the admin UI renders (Rate /60, Time /25, Default /15).
  */
 function computeRepaymentScore({
   repayments = [],
   loanAmount = 0,
   dueDate,
-  priorDefaults = { active: false, recoveredCleanCycles: 0 },
+  priorDefaults = { active: false, everDefaulted: false, cleanCyclesSinceDefault: 0 },
 }) {
   const principal = Number(loanAmount) > 0 ? Number(loanAmount) : 0;
   const totalPaid = repayments.reduce((s, r) => {
@@ -190,47 +231,110 @@ function computeRepaymentScore({
       .filter((r) => r.payment_date)
       .slice()
       .sort((a, b) => new Date(a.payment_date) - new Date(b.payment_date));
+    let lastPaymentDate = null;
     for (const r of ordered) {
       const n = Number(r.amount_paid);
-      if (Number.isFinite(n) && n > 0) cumulative += n;
+      if (Number.isFinite(n) && n > 0) {
+        cumulative += n;
+        lastPaymentDate = new Date(r.payment_date);
+      }
       if (principal > 0 && cumulative >= principal) {
         payoffDate = new Date(r.payment_date);
         break;
       }
     }
-    // Not yet paid off: measure against today, so an overdue loan is penalised
-    // while it is still overdue rather than only after it settles.
-    if (!payoffDate) payoffDate = new Date();
+
+    /**
+     * Which date to measure against (spec 3.2B: "Did the farmer repay within
+     * the agreed window?").
+     *
+     *   fully repaid        -> the date the balance was cleared
+     *   partially repaid    -> the date of their most recent payment
+     *   nothing paid at all -> today, so an overdue loan is penalised while it
+     *                          is still overdue rather than only once it settles
+     *
+     * FIXED — this previously measured a partially repaid loan against TODAY,
+     * which double-penalised the farmer. The specification's own worked
+     * example (3.3) is a farmer who repaid 95% of a loan before the deadline
+     * and scores the full 25/25 for timeliness: the 5% shortfall is already
+     * reflected in the Repayment Rate component (57/60 rather than 60/60), and
+     * charging it a second time on timeliness counts the same shortfall twice.
+     * Under the old logic that farmer scored 5/25 and the engine disagreed with
+     * the document it implements.
+     *
+     * Timeliness answers "did they pay when they said they would"; Rate
+     * answers "how much did they pay". Keeping the two questions separate is
+     * what stops one shortfall being charged twice.
+     */
+    if (!payoffDate) payoffDate = lastPaymentDate || new Date();
 
     const daysLate = Math.max(0, Math.floor((payoffDate - due) / MS_PER_DAY));
-    if (daysLate <= 0) timeliness = REPAY_TIMELINESS_MAX;
-    else if (daysLate <= 30) timeliness = 8;
-    else timeliness = 2;
+    if (daysLate <= 0) timeliness = TIMELINESS_ON_TIME;
+    else if (daysLate <= 30) timeliness = TIMELINESS_LATE_30;
+    else timeliness = TIMELINESS_LATE_OVER_30;
     timelinessBasis = daysLate <= 0 ? 'on_time' : daysLate <= 30 ? 'late_within_30d' : 'late_over_30d';
 
-    // Context-flagged late repayments (weather / market / health) are
-    // documented but NOT penalised — per spec section 3.2B.
+    // Context-flagged late repayments (weather event, market price collapse,
+    // health emergency) are documented but NOT penalised the way an unexcused
+    // delay is, so the model does not punish farmers for events outside their
+    // control (spec 3.2B).
     const anyContext = repayments.some((r) => r.context_flag && r.context_flag !== 'none');
     if (anyContext && daysLate > 0) {
-      timeliness = REPAY_TIMELINESS_MAX;
+      timeliness = TIMELINESS_ON_TIME;
       timelinessBasis = 'late_context_excused';
     }
   }
 
-  // FIXED — default history also started at full marks. A farmer with no
-  // repayment record at all is not a farmer with a clean record; 5/5 is only
-  // awarded where there is a completed cycle to vouch for it.
+  /**
+   * Default history (spec 3.2C) — three levels, so a recovered defaulter can
+   * rehabilitate rather than carrying the mark for life:
+   *
+   *   no defaults on record                       15
+   *   recovered: 2+ clean cycles since the default  8
+   *   active (unresolved) default                   0
+   *
+   * DATA LIMITATION — the middle level is implemented but cannot currently be
+   * reached. Detecting "recovered" needs a recorded default history, and the
+   * schema has nowhere to record one: `financing_status` is
+   * pending|approved|rejected|disbursed|completed, with no defaulted state,
+   * and nothing stamps the date a loan fell into default. So a farmer who
+   * defaulted and recovered is indistinguishable from one who never defaulted,
+   * and scores 15 rather than 8.
+   *
+   * The alternative — treating completed cycles as evidence of recovery —
+   * would be worse: it would hand the 8-point "recovered defaulter" score to
+   * every farmer who has simply finished two loans cleanly and never defaulted
+   * at all, which understates them.
+   *
+   * To switch the middle level on, add a defaulted state (or a `defaulted_at`
+   * stamp) to financing_requests and pass `everDefaulted` plus
+   * `cleanCyclesSinceDefault` in. The branch below is ready for it.
+   */
+  const everDefaulted = Boolean(priorDefaults.everDefaulted) || Boolean(priorDefaults.active);
   let defaultHistory;
-  if (priorDefaults.active) defaultHistory = 0;
-  else if (priorDefaults.recoveredCleanCycles >= 2) defaultHistory = REPAY_DEFAULT_MAX;
-  else if (priorDefaults.recoveredCleanCycles >= 1) defaultHistory = 3;
-  else defaultHistory = 0;
+  let defaultHistoryBasis;
+
+  if (priorDefaults.active) {
+    defaultHistory = DEFAULT_ACTIVE;
+    defaultHistoryBasis = 'active_default';
+  } else if (!everDefaulted) {
+    defaultHistory = DEFAULT_NONE;
+    defaultHistoryBasis = 'no_defaults_on_record';
+  } else if ((priorDefaults.cleanCyclesSinceDefault || 0) >= RECOVERY_CLEAN_CYCLES) {
+    defaultHistory = DEFAULT_RECOVERED;
+    defaultHistoryBasis = 'recovered';
+  } else {
+    // Defaulted before and not yet two clean cycles past it.
+    defaultHistory = DEFAULT_ACTIVE;
+    defaultHistoryBasis = 'recovering';
+  }
 
   const total = truncateOneDecimal(clamp(repaymentRate + timeliness + defaultHistory, 0, REPAYMENT_MAX));
   return {
     score: total,
     components: { repaymentRate, timeliness, defaultHistory },
     timelinessBasis,
+    defaultHistoryBasis,
     totalPaid: Math.round(totalPaid * 100) / 100,
   };
 }
@@ -353,7 +457,9 @@ async function recalculateFarmerScore(farmerId, { triggerReason = 'manual' } = {
 
   const { data: farmer, error: ferr } = await sb
     .from('farmers')
-    .select('id, state, lga, cooperative_id, farm_profiles(farm_size_acres, computed_area_acres)')
+    .select(
+      'id, state, lga, cooperative_id, farm_profiles(id, farm_size_acres, computed_area_acres, is_primary, created_at)'
+    )
     .eq('id', farmerId)
     .maybeSingle();
   if (ferr) throw ferr;
@@ -363,8 +469,15 @@ async function recalculateFarmerScore(farmerId, { triggerReason = 'manual' } = {
   if (prodResult.error) throw prodResult.error;
   const prod = prodResult.production;
 
-  const farm = farmer.farm_profiles?.[0] || farmer.farm_profiles || null;
-  const farmSize = Number(farm?.farm_size_acres || farm?.computed_area_acres || 0);
+  // FIXED — this took `farm_profiles[0]`, one arbitrary plot, as the farmer's
+  // land. A farmer with two farms had their whole season's output divided by
+  // one farm's acreage, which inflated yield-per-hectare and so the
+  // production score. The farmer's land is the SUM of their farms.
+  //
+  // This is only the fallback: a production record that carries its own
+  // `farm_size_acres` (the land that season's yield actually came off) still
+  // wins below, which is the more precise figure when the agent recorded it.
+  const farmSize = summarizeFarms(farmer.farm_profiles).totalAcres;
   const farmSizeHa = Number.isFinite(farmSize) && farmSize > 0 ? farmSize * ACRES_TO_HECTARES : 0;
 
   let production = { score: 0, yieldRatio: 0 };
@@ -446,14 +559,33 @@ async function recalculateFarmerScore(farmerId, { triggerReason = 'manual' } = {
       repayments: repayments || [],
       loanAmount: principal,
       dueDate: due ? due.toISOString() : null,
-      priorDefaults: { active: hasActiveDefault, recoveredCleanCycles },
+      priorDefaults: {
+        active: hasActiveDefault,
+        // See the DATA LIMITATION note in computeRepaymentScore: there is no
+        // recorded default history to read, so "recovered" is not detectable
+        // yet and `cleanCyclesSinceDefault` is carried for when it is.
+        everDefaulted: hasActiveDefault,
+        cleanCyclesSinceDefault: recoveredCleanCycles,
+      },
     });
   }
 
-  // Final = Yield (0-60) + Repayment (0-40). First cycle = Yield only.
-  // The outer clamp is defence-in-depth: every component is already bounded,
-  // but a score outside 0-100 must never reach a lender's screen.
-  const rawFinal = isFirstCycle ? production.score : production.score + repayment.score;
+  /**
+   * Final Credit Score = (Production + Repayment) / 2, each out of 100
+   * (spec section 4). Both carry equal weight: a farmer must be able to
+   * produce (capacity) and willing to repay (character).
+   *
+   * First cycle (spec section 7): no repayment behaviour exists to score, so
+   * the score is Production alone, held at the top of Tier C until a first
+   * repayment is recorded. That stops a brand-new borrower reaching Tier A or
+   * B limits before showing any repayment behaviour at all.
+   *
+   * The outer clamp is defence-in-depth: every component is already bounded,
+   * but a score outside 0-100 must never reach a lender's screen.
+   */
+  const rawFinal = isFirstCycle
+    ? Math.min(production.score, FIRST_CYCLE_SCORE_CAP)
+    : (production.score + repayment.score) / 2;
   const finalScore = truncateOneDecimal(clamp(rawFinal, 0, SCORE_MAX));
   const tier = tierForScore(finalScore);
 
@@ -462,8 +594,8 @@ async function recalculateFarmerScore(farmerId, { triggerReason = 'manual' } = {
   const { error: upsertErr } = await sb.from('credit_scores').upsert(
     {
       farmer_id: farmerId,
-      production_score: production.score, // 0-60
-      repayment_score: repayment.score, // 0-40
+      production_score: production.score, // 0-100
+      repayment_score: repayment.score, // 0-100
       repayment_rate_score: repayment.components.repaymentRate, // 0-25
       timeliness_score: repayment.components.timeliness, // 0-10
       default_history_score: repayment.components.defaultHistory, // 0-5
@@ -577,15 +709,26 @@ async function recalculateCooperativeScore(cooperativeId) {
   for (const group of chunk(ids)) {
     const { data: scores, error } = await sb
       .from('credit_scores')
-      .select('farmer_id, final_credit_score, credit_tier')
+      .select('farmer_id, final_credit_score, production_score, is_first_cycle, credit_tier')
       .in('farmer_id', group);
     if (error) throw error;
 
     for (const s of scores || []) {
+      /**
+       * Spec section 7: a first-cycle member who has not yet completed a
+       * repayment contributes their PRODUCTION score to the cooperative
+       * average — not their final score, which is held at the Tier C ceiling
+       * (84). Using the capped final would let a cohort of new members drag a
+       * strong cooperative down toward 84, or flatter a weak one, before any
+       * repayment data exists to justify either.
+       */
+      const useProduction = s.is_first_cycle === true;
+      const raw = useProduction ? s.production_score : s.final_credit_score;
+
       // FIXED — `sum += Number(s.final_credit_score)` turned the whole average
       // into NaN if a single row had a NULL score, and NaN was then written to
       // `cooperatives.average_credit_score` and rendered to lenders.
-      const v = Number(s.final_credit_score);
+      const v = Number(raw);
       if (!Number.isFinite(v)) continue;
       sum += v;
       scored += 1;
@@ -593,6 +736,20 @@ async function recalculateCooperativeScore(cooperativeId) {
     }
   }
 
+  /**
+   * Cooperative Average Score = sum of contributing member scores / number of
+   * contributing members (spec 6.1).
+   *
+   * AMBIGUITY, resolved deliberately: the formula line reads "divided by Total
+   * number of farmers in cooperative", but the sentence after it says only
+   * members who have a score contribute, and the worked example has every
+   * member scored, so it does not settle the case. Dividing by TOTAL would mean
+   * that simply registering a farmer — before any yield data exists for them —
+   * instantly drags the cooperative's tier down, which would penalise
+   * cooperatives for growing. So the divisor is the number of contributing
+   * members, and `total_farmers` / `scored_farmers` are both stored alongside
+   * so the difference is visible rather than hidden inside the average.
+   */
   const avg = scored > 0 ? truncateOneDecimal(clamp(sum / scored, 0, SCORE_MAX)) : 0;
   const tier = tierForScore(avg);
 

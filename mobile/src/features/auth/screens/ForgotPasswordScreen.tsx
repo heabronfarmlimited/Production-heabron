@@ -6,8 +6,9 @@
  * code to reset your password.' One Email field, button 'Send Code'.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
+import { Image } from 'expo-image';
 import { Controller, useForm } from 'react-hook-form';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { AppButton } from '../../../components/AppButton';
 import { AppSkeleton } from '../../../components/AppSkeleton';
@@ -36,7 +37,7 @@ export function ForgotPasswordScreen() {
 
   return (
     <AppSkeleton isBusy={isPending} bodyPadding={styles.noPadding} scrollable>
-      <Image source={images.appBarBg} style={styles.headerImage} resizeMode="cover" />
+      <Image source={images.appBarBg} style={styles.headerImage} contentFit="cover" />
 
       <View style={styles.backButton}>
         <AuthBackButton />

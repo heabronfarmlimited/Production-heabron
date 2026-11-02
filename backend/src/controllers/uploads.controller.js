@@ -19,6 +19,12 @@ const BUCKETS = {
   warehouse_receipt: { bucket: 'farmer-documents', folder: 'warehouse-receipts', isPublic: false },
   buyer_receipt: { bucket: 'farmer-documents', folder: 'buyer-receipts', isPublic: false },
   agent_signature: { bucket: 'agent-documents', folder: 'signatures', isPublic: false },
+  // Data-consent evidence: the signer's signature image (or thumbprint photo
+  // when they cannot sign) and the recorded voice statement. Private, and
+  // admin-only to view — partners see consent STATUS only, never the evidence.
+  consent_signature: { bucket: 'consent-evidence', folder: 'signatures', isPublic: false },
+  consent_voice: { bucket: 'consent-evidence', folder: 'voice', isPublic: false },
+  consent_thumbprint: { bucket: 'consent-evidence', folder: 'thumbprints', isPublic: false },
   partner_logo: { bucket: 'partner-logos', folder: '', isPublic: true },
   cooperative_logo: { bucket: 'partner-logos', folder: 'cooperatives', isPublic: true },
   avatar: { bucket: 'agent-documents', folder: 'avatars', isPublic: false },

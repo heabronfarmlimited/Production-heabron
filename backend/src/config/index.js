@@ -137,6 +137,31 @@ module.exports = {
     },
   },
 
+  /**
+   * Satellite basemap for the farm map.
+   *
+   * The key is deliberately SERVER-side. Google's Maps Static API cannot be
+   * restricted to a mobile application (only by HTTP referrer or IP), so a
+   * key shipped in the app bundle would be an unrestricted key in a public
+   * file. The app asks this backend for the picture instead; see
+   * services/satellite.
+   *
+   * Unset means the farm map still works — it draws the boundary, the marker
+   * and the measurements from the recorded GPS points and simply has no
+   * imagery behind them. Nothing breaks without a key.
+   */
+  map: {
+    // 'google' (recommended) or 'mapbox'.
+    provider: (process.env.MAP_PROVIDER || '').trim().toLowerCase() || null,
+    apiKey: process.env.MAP_STATIC_API_KEY || null,
+    /**
+     * How long the app and any CDN may keep a tile. Farm imagery does not
+     * change week to week, and every repeat request is billable, so this is
+     * deliberately long.
+     */
+    cacheSeconds: parseInt(process.env.MAP_CACHE_SECONDS || '604800', 10),
+  },
+
   rateLimit: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
     max: parseInt(process.env.RATE_LIMIT_MAX || '300', 10),

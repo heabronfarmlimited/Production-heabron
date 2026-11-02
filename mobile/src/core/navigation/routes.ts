@@ -59,6 +59,9 @@ export const routes = {
   // -------------------------------------------------------------- tab shell
   home: '/(tabs)',
   dashboard: '/(tabs)',
+
+  /** Data consent capture — the gate before onboarding. */
+  consent: '/consent',
   cooperativesTab: '/(tabs)/cooperatives',
   farmersTab: '/(tabs)/farmers',
   activitiesTab: '/(tabs)/activities',
@@ -80,6 +83,11 @@ export const routes = {
   // ---------------------------------------------------------------- farmers
   farmerAdd: '/farmers/add',
   farmerBulkUpload: '/farmers/bulk-upload',
+  /**
+   * The offline queue: what is waiting to sync and what failed. Reached from
+   * the home screen's sync tiles (v2).
+   */
+  syncQueue: '/farmers/sync',
   farmerDetails: (id: string) => href(`/farmers/${id}`),
   farmerEdit: (id: string) => href(`/farmers/${id}/edit`),
   farmerRecordYields: (id: string) => href(`/farmers/${id}/yields/record`),
@@ -101,6 +109,31 @@ export const routes = {
    * layer with no screen, so there is no Dart route to port.
    */
   farmerBoundary: (id: string) => href(`/farmers/${id}/boundary`),
+  /**
+   * The farmer's farms (v2 "Add Another Farm"). The list is its own screen
+   * rather than a section of the details screen: a farmer with four plots
+   * would push the score, the actions and the activity below the fold.
+   */
+  farmerFarms: (id: string) => href(`/farmers/${id}/farms`),
+  /**
+   * The Update Record hub (v2): one entry point for the five records an
+   * agent captures against a farmer in the field.
+   */
+  farmerUpdateRecord: (id: string) => href(`/farmers/${id}/update-record`),
+  /**
+   * The full-screen farm map (v2). A plain route, so closing it returns to
+   * the profile underneath with its state and cache intact.
+   */
+  farmerMap: (id: string) => href(`/farmers/${id}/map`),
+  /**
+   * Log a produce delivery. The schema, body builder, API call and mutation
+   * all existed with no screen; "Log delivery" on the home screen opened the
+   * Activities tab, which only lists them.
+   */
+  farmerLogDelivery: (id: string) => href(`/farmers/${id}/delivery`),
+  farmerFarmAdd: (id: string) => href(`/farmers/${id}/farms/add`),
+  farmerFarmEdit: (farmerId: string, farmId: string) =>
+    href(`/farmers/${farmerId}/farms/${farmId}`),
 
   // ----------------------------------------------------------------- wallet
   settlementRequest: '/wallet/settlement/request',

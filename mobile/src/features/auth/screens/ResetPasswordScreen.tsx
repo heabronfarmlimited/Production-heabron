@@ -15,9 +15,10 @@
  *     match check is in the schema rather than a post-submit toast.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
+import { Image } from 'expo-image';
 import { useLocalSearchParams } from 'expo-router';
 import { Controller, useForm } from 'react-hook-form';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { AppButton } from '../../../components/AppButton';
 import { AppSkeleton } from '../../../components/AppSkeleton';
@@ -60,7 +61,7 @@ export function ResetPasswordScreen() {
 
   return (
     <AppSkeleton isBusy={isPending} bodyPadding={styles.noPadding} scrollable>
-      <Image source={images.appBarBg} style={styles.headerImage} resizeMode="cover" />
+      <Image source={images.appBarBg} style={styles.headerImage} contentFit="cover" />
 
       <View style={styles.backButton}>
         <AuthBackButton />

@@ -25,6 +25,73 @@ export function SummaryCard({ title, count }: { title: string; count: string }) 
 }
 
 /**
+ * A compact home tile (v2): a number, a label, and — when something needs
+ * doing — a tappable tone that says so.
+ *
+ * `tone` is deliberately not derived from the value inside the component: a
+ * count of 3 is good news for farmers registered and bad news for records
+ * that failed to sync, and only the caller knows which.
+ */
+export function StatTile({
+  label,
+  value,
+  caption,
+  tone = 'neutral',
+  onPress,
+  testID,
+}: {
+  label: string;
+  value: string;
+  caption?: string;
+  tone?: 'neutral' | 'attention' | 'problem';
+  onPress?: () => void;
+  testID?: string;
+}) {
+  const toneStyle =
+    tone === 'problem'
+      ? styles.tileProblem
+      : tone === 'attention'
+        ? styles.tileAttention
+        : null;
+  const valueStyle =
+    tone === 'problem'
+      ? styles.tileValueProblem
+      : tone === 'attention'
+        ? styles.tileValueAttention
+        : null;
+
+  const body = (
+    <View style={[styles.tile, toneStyle]}>
+      <Text style={[styles.tileValue, valueStyle]} numberOfLines={1}>
+        {value}
+      </Text>
+      <Text style={styles.tileLabel} numberOfLines={2}>
+        {label}
+      </Text>
+      {caption ? (
+        <Text style={styles.tileCaption} numberOfLines={2}>
+          {caption}
+        </Text>
+      ) : null}
+    </View>
+  );
+
+  if (!onPress) return body;
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${label}: ${value}`}
+      onPress={onPress}
+      style={styles.tileWrap}
+      testID={testID}
+    >
+      {body}
+    </Pressable>
+  );
+}
+
+/**
  * `DashboardActionCard` — tinted `primary @8 %`, radius 8, border
  * `primary @35 %`, with a 34r icon chip. `isDisabled` greys it out.
  */
@@ -111,6 +178,53 @@ export function ActivityItem({
 }
 
 const styles = StyleSheet.create({
+  tileWrap: {
+    flex: 1,
+  },
+  tile: {
+    flex: 1,
+    minHeight: h(78),
+    borderRadius: r(8),
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    paddingVertical: h(10),
+    paddingHorizontal: r(12),
+    justifyContent: 'center',
+  },
+  tileAttention: {
+    borderColor: 'rgba(255, 152, 0, 0.45)',
+    backgroundColor: 'rgba(255, 152, 0, 0.07)',
+  },
+  tileProblem: {
+    borderColor: 'rgba(244, 67, 54, 0.45)',
+    backgroundColor: 'rgba(244, 67, 54, 0.07)',
+  },
+  tileValue: {
+    ...textTheme.titleMedium,
+    fontSize: spMin(22),
+    fontFamily: fontWeights.semiBold,
+    fontWeight: '600',
+    color: colors.black,
+  },
+  tileValueAttention: {
+    color: colors.secondaryDeep,
+  },
+  tileValueProblem: {
+    color: colors.red,
+  },
+  tileLabel: {
+    ...textTheme.bodySmall,
+    fontSize: spMin(11),
+    color: colors.secondaryTextColor,
+    lineHeight: spMin(15),
+  },
+  tileCaption: {
+    ...textTheme.bodySmall,
+    fontSize: spMin(10),
+    color: colors.primary,
+    marginTop: h(2),
+  },
   summary: {
     flex: 1,
     minHeight: h(109),

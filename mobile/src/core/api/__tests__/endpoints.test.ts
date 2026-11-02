@@ -14,12 +14,15 @@ import {
 } from '../endpoints';
 
 describe('upload kinds match the backend BUCKETS map', () => {
-  it('lists all fourteen buckets', () => {
+  it('lists every bucket the backend accepts', () => {
     expect([...UPLOAD_KINDS].sort()).toEqual(
       [
         'agent_signature',
         'avatar',
         'buyer_receipt',
+        'consent_signature',
+        'consent_thumbprint',
+        'consent_voice',
         'cooperative_logo',
         'delivery_proof',
         'farm_photo',
@@ -96,5 +99,19 @@ describe('endpoint paths', () => {
   it('points financing requests at the single shared path', () => {
     // Dart had two constants with the identical value.
     expect(endpoints.financingRequests).toBe('/agent/financing-requests');
+  });
+});
+
+describe('consent evidence uploads', () => {
+  it('routes consent evidence to private kinds only', () => {
+    // Signatures, thumbprints and voice recordings are biometric-adjacent
+    // personal data: admin-only to view, and never public. A public bucket
+    // here would make them readable by anyone holding the URL.
+    for (const kind of ['consent_signature', 'consent_thumbprint', 'consent_voice'] as const) {
+      expect(UPLOAD_KINDS).toContain(kind);
+      expect(PUBLIC_UPLOAD_KINDS).not.toContain(kind);
+      // Consent is collected by an approved agent, never before approval.
+      expect(PRE_AUTH_UPLOAD_KINDS).not.toContain(kind);
+    }
   });
 });

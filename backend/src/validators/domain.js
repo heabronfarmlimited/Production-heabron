@@ -10,20 +10,69 @@ const gpsLng = Joi.number().min(-180).max(180);
 // COOPERATIVES
 // =============================================================================
 const createCooperative = Joi.object({
+  /**
+   * Idempotency key: one UUID per form session, resent on every retry
+   * (v2 flow: "duplicate-safe client UUID"). A repeat submission returns the
+   * record that already exists instead of creating a second one. Optional —
+   * an older app build that sends none behaves exactly as before.
+   */
+  clientRequestId: uuid.optional(),
+  // Issued by POST /agent/consent. The gate in cooperatives.create requires
+  // it: a cooperative cannot be registered without a completed Flow A.
+  consentId: uuid.optional(),
   name: Joi.string().min(2).max(150).required(),
   registrationNumber: Joi.string().max(60).optional(),
   leaderName: Joi.string().max(120).optional(),
   leaderPhone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).optional(),
+  /**
+   * The cooperative's main crop (v2 flow: "exactly one primary crop with
+   * secondaries that cannot duplicate it").
+   *
+   * `cooperatives.primary_crop` has existed all along, is read by the credit
+   * report and is listed as an approvable field on change requests — but no
+   * endpoint ever wrote it, because it was missing from this schema. Every
+   * cooperative in the database therefore has a NULL primary crop.
+   */
+  primaryCrop: Joi.string().max(60).optional(),
+  /** The other crops the cooperative supports. */
   cropsSupported: Joi.array().items(Joi.string()).default([]),
   state: Joi.string().required(),
   lga: Joi.string().required(),
   address: Joi.string().max(500).optional(),
-  estimatedLandSize: Joi.number().min(0).optional(),
+  // DEPRECATED (v2 user flow, section "Register Cooperative"): "Do not show
+  // or ask for cooperative land size... Land total is derived from eligible
+  // linked farmer farm records."
+  //
+  // `.strip()` rather than `.forbidden()` or removal: an app build still in
+  // the field sends this field, and both alternatives would break those
+  // installs — `forbidden()` with a 422 on every cooperative registration,
+  // removal with a silently ignored key that still looked accepted. Stripping
+  // accepts the request and discards the value, so the column is never
+  // written again while old clients keep working. `cooperatives.controller`
+  // no longer maps it either, so this is belt and braces.
+  estimatedLandSize: Joi.any().strip(),
   logoUrl: Joi.string().uri().optional(),
   gpsLat: gpsLat.optional(),
   gpsLng: gpsLng.optional(),
   gpsPolygon: Joi.array().items(Joi.object({ lat: gpsLat, lng: gpsLng })).optional(),
-});
+})
+  .custom((value, helpers) => {
+    // The primary crop must not also appear among the secondaries. Allowing
+    // it would double-count the cooperative's main crop in every list built
+    // from `[primary_crop, ...crops_supported]` — including the one on the
+    // lender's report.
+    const primary = (value.primaryCrop || '').trim().toLowerCase();
+    if (!primary) return value;
+    const duplicated = (value.cropsSupported || []).some(
+      (crop) => String(crop).trim().toLowerCase() === primary
+    );
+    if (duplicated) {
+      return helpers.message(
+        'The primary crop must not be repeated in the other crops supported'
+      );
+    }
+    return value;
+  });
 
 /**
  * FIXED — two bugs in every `createX.fork(...)` update schema.
@@ -52,6 +101,16 @@ const updateCooperative = createCooperative
 // FARMERS
 // =============================================================================
 const createFarmer = Joi.object({
+  /**
+   * Idempotency key: one UUID per form session, resent on every retry
+   * (v2 flow: "duplicate-safe client UUID"). A repeat submission returns the
+   * record that already exists instead of creating a second one. Optional —
+   * an older app build that sends none behaves exactly as before.
+   */
+  clientRequestId: uuid.optional(),
+  // Issued by POST /agent/consent. The gate in farmers.create requires it:
+  // a farmer profile cannot be submitted without a completed Flow B.
+  consentId: uuid.optional(),
   cooperativeId: uuid.required(),
   fullName: Joi.string().min(2).max(150).required(),
   dateOfBirth: Joi.date().iso().less('now').optional(),
@@ -69,9 +128,22 @@ const createFarmer = Joi.object({
   idImageUrl: Joi.string().uri().optional(),
   farmerPhotoUrl: Joi.string().uri().optional(),
   memberSince: Joi.date().iso().optional(),
-  // Nested farm profile
+  // Nested farm profile — the farmer's PRIMARY farm. Further farms are added
+  // through POST /agent/farmers/:farmerId/farms (see `createFarm` below).
   farm: Joi.object({
-    farmSizeAcres: Joi.number().min(0).required(),
+    // The agent's own name for the plot ("Cassava plot"). Optional: the API
+    // labels an unnamed farm by position.
+    farmLabel: Joi.string().max(80).allow('', null).optional(),
+    /**
+     * FIXED — this was `min(0)`, so a 0-acre farm was accepted. Land size is
+     * the DENOMINATOR of the production score: a zero made the farmer
+     * permanently unscoreable, and the engine's divide-by-zero guard then
+     * scored them 0 on production with nothing on screen explaining why. The
+     * user flow lists "missing farm area" as an exception to handle, and
+     * refusing it at the door is the handling. `map-farm` already rejected a
+     * zero override for exactly this reason; the create path did not.
+     */
+    farmSizeAcres: Joi.number().greater(0).required(),
     plotCount: Joi.number().integer().min(1).default(1),
     cropType: Joi.string().required(),
     secondaryCrops: Joi.array().items(Joi.string()).max(7).optional(),
@@ -90,7 +162,20 @@ const createFarmer = Joi.object({
     gpsPolygon: Joi.array().items(Joi.object({ lat: gpsLat, lng: gpsLng })).optional(),
     landDocumentUrl: Joi.string().uri().optional(),
     landDocumentType: Joi.string().optional(),
-    farmPhotoUrls: Joi.array().items(Joi.string().uri()).optional(),
+    /**
+     * Farm photos. The v2 flow asks for 10–20 per farm.
+     *
+     * The MAXIMUM is enforced (20): an unbounded array behind one farmer is
+     * how a buggy retry loop fills the bucket and makes the record slow to
+     * read. The MINIMUM deliberately is not. A hard floor of ten would block
+     * a farmer whose onboarding is otherwise complete — an agent on a weak
+     * connection gets six photos up and then cannot save the person at all,
+     * and the flow's own exception list treats a stalled upload as something
+     * to recover from rather than a reason to lose the record. The app asks
+     * for ten and says how many are still wanted; the server does not refuse
+     * a farmer over it.
+     */
+    farmPhotoUrls: Joi.array().items(Joi.string().uri()).max(20).optional(),
   }).optional(),
 });
 
@@ -98,6 +183,11 @@ const createFarmer = Joi.object({
 const mapFarm = Joi.object({
   gpsPolygon: Joi.array().items(Joi.object({ lat: gpsLat.required(), lng: gpsLng.required() })).min(3).required(),
   overrideSizeAcres: Joi.number().min(0).optional(), // optional manual override
+  // Which of the farmer's farms this boundary belongs to. Omitted means the
+  // primary farm, which is what the single-farm map screen means. Without
+  // this a farmer with several plots could have farm 2's boundary saved onto
+  // farm 1.
+  farmId: uuid.optional(),
 });
 
 // FIXED — `fork()` only reaches TOP-LEVEL keys, so `farm.farmSizeAcres` and
@@ -115,6 +205,28 @@ const updateFarmer = createFarmer
   .keys({ farm: farmUpdateSchema.optional() })
   .min(1)
   .options(patchOptions);
+
+// ---------------------------------------------------------------------------
+// Farms within a farmer ("Add Another Farm")
+//
+// Both schemas are derived from the nested `farm` object rather than written
+// out again, so a field added to onboarding is automatically accepted when
+// adding a second farm. Writing them twice is how the two drift apart and a
+// field ends up storable on farm 1 but not on farm 2.
+// ---------------------------------------------------------------------------
+
+/** Body of POST /agent/farmers/:farmerId/farms — a whole new farm. */
+const createFarm = createFarmer.extract('farm');
+
+/**
+ * Body of PATCH /agent/farmers/:farmerId/farms/:farmId — a partial edit.
+ *
+ * Same shape as a nested farm patch: every key optional, at least one
+ * present, and `noDefaults` so an edit of one field does not write the
+ * creation defaults over `plotCount`, `irrigationAccess`, `waterSource` and
+ * `yearsExperience`.
+ */
+const updateFarm = farmUpdateSchema.options(patchOptions);
 
 // =============================================================================
 // DELIVERIES
@@ -191,7 +303,10 @@ const createProduction = Joi.object({
   cycleNumber: Joi.number().integer().min(1).default(1),
   season: Joi.string().required(),
   crop: Joi.string().required(),
-  farmSizeAcres: Joi.number().min(0).optional(),
+  // The land this season's yield came off. Zero would divide the yield by
+  // nothing; the scoring engine falls back to the farm's own size when this
+  // is absent, which is the right behaviour for "not recorded".
+  farmSizeAcres: Joi.number().greater(0).optional(),
   expectedPlantingDate: Joi.date().iso().optional(),
   expectedHarvestDate: Joi.date().iso().optional(),
   expectedYieldTonnes: Joi.number().min(0).optional(),
@@ -440,6 +555,14 @@ const listQuery = Joi.object({
   pageSize: Joi.number().integer().min(1).max(100).default(20),
   search: Joi.string().max(120).empty('').optional(),
   status: Joi.string().max(60).empty('').optional(),
+  /**
+   * Repayments: counted rows only, voided only, or (omitted) both.
+   *
+   * `Joi.boolean()` accepts the strings 'true'/'false' a query string
+   * carries, and `.empty('')` keeps an unset filter from arriving as a
+   * literal empty string.
+   */
+  voided: Joi.boolean().empty('').optional(),
   farmerId: uuid.empty('').optional(),
   cooperativeId: uuid.empty('').optional(),
   agentId: uuid.empty('').optional(),
@@ -463,6 +586,63 @@ const listQuery = Joi.object({
   q: Joi.string().max(120).empty('').optional(),
   type: Joi.string().valid('all', 'farmer', 'cooperative').empty('').optional(),
 }).options({ stripUnknown: true });
+
+// =============================================================================
+// DATA CONSENT (agent + admin)
+// -----------------------------------------------------------------------------
+// Shapes only. The decisions with legal weight — which items are required,
+// whether sharing is granted, whether a farmer may override their
+// cooperative's refusal — live in services/consent/rules.js and are applied in
+// the controller, so there is one place to read them and one place to test
+// them.
+// =============================================================================
+const consentEntityType = Joi.string().valid('cooperative', 'farmer');
+
+/** C1..C4 or F1..F3, each an explicit boolean. */
+const consentItemResponses = Joi.object()
+  .pattern(/^[CF][1-9]$/, Joi.boolean().required())
+  .min(1)
+  .required();
+
+const recordConsent = Joi.object({
+  entityType: consentEntityType.required(),
+  // Absent for a farmer: consent is captured BEFORE the farmer row exists,
+  // and the controller links them once it does.
+  entityId: uuid.optional(),
+  // Required for a farmer so the cooperative's sharing decision can be applied.
+  cooperativeId: uuid.optional(),
+
+  agreementVersion: Joi.string().max(20).default('v1.0'),
+  language: Joi.string().max(10).default('en'),
+  itemResponses: consentItemResponses,
+
+  signerName: Joi.string().min(2).max(150).required(),
+  signerRole: Joi.string().max(80).optional(),
+  signerPhone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).optional(),
+  signerEmail: Joi.string().email().optional(),
+
+  secondOfficerName: Joi.string().max(150).optional(),
+  secondOfficerPhone: Joi.string().pattern(/^\+?[0-9]{7,15}$/).optional(),
+  secondOfficerEmail: Joi.string().email().optional(),
+
+  signatureFile: Joi.string().max(500).optional(),
+  voiceFile: Joi.string().max(500).optional(),
+  voiceDurationSeconds: Joi.number().min(0).max(600).optional(),
+  unableToSign: Joi.boolean().default(false),
+
+  // The device clock as the agent saw it; the server records its own too.
+  timestampDevice: Joi.date().iso().optional(),
+  gpsLatitude: Joi.number().min(-90).max(90).optional(),
+  gpsLongitude: Joi.number().min(-180).max(180).optional(),
+});
+
+const verifyConsentOtp = Joi.object({
+  code: Joi.string().pattern(/^[0-9]{6}$/).required(),
+});
+
+const withdrawConsent = Joi.object({
+  reason: Joi.string().min(3).max(500).required(),
+});
 
 // =============================================================================
 // REGIONAL BENCHMARKS (admin)
@@ -492,6 +672,8 @@ module.exports = {
   updateCooperative,
   createFarmer,
   updateFarmer,
+  createFarm,
+  updateFarm,
   mapFarm,
   createDelivery,
   createFinancingRequest,
@@ -523,4 +705,7 @@ module.exports = {
   suspendAgent,
   updateProfile,
   listQuery,
+  recordConsent,
+  verifyConsentOtp,
+  withdrawConsent,
 };

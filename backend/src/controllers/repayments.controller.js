@@ -48,7 +48,7 @@ async function recomputeLoanPosition(sb, financing) {
 async function list(req, res) {
   const sb = supabaseAdmin();
   const { page, pageSize, from, to } = parsePagination(req.query);
-  const { startDate, endDate, farmerId } = req.query;
+  const { startDate, endDate, farmerId, voided } = req.query;
 
   let q = sb.from('repayment_records').select(
     `*, farmers(id, full_name), financing_requests(id, loan_amount, cooperative_id, cooperatives(name))`,
@@ -56,6 +56,14 @@ async function list(req, res) {
   );
   if (req.user.role === 'field_agent') q = q.eq('recorded_by_agent_id', req.user.userId);
   if (farmerId) q = q.eq('farmer_id', farmerId);
+  // A voided repayment still exists — it just stops counting toward the loan
+  // balance and the repayment score. Without this filter an admin looking
+  // for one had to page through every payment ever recorded, and the
+  // dashboard's Counted/Voided tabs would all have shown the same rows.
+  // `undefined` means "both", which is why this tests for a boolean rather
+  // than truthiness: `voided=false` must filter to the counted ones, not be
+  // read as absent.
+  if (typeof voided === 'boolean') q = q.eq('voided', voided);
   if (startDate) q = q.gte('payment_date', startDate);
   if (endDate) q = q.lte('payment_date', endDate);
   q = q.order('payment_date', { ascending: false }).range(from, to);

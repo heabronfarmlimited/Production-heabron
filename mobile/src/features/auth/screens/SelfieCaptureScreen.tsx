@@ -9,8 +9,9 @@
  * buttons (camera / gallery), a Spacer, and — only once a photo exists — a
  * 'Submit' button that simply popped back.
  */
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppButton } from '../../../components/AppButton';

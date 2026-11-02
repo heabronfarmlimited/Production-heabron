@@ -10,12 +10,13 @@
  * broken URL by rendering the placeholder tile rather than an error glyph —
  * the Dart widget was handed `logoUrl ?? ''` and showed a broken image.
  */
-import { Image } from 'expo-image';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { RemoteImage } from '../../../components/RemoteImage';
 import { colors } from '../../../core/theme/colors';
 import { h, r, spMin } from '../../../core/theme/responsive';
 import { fontWeights, textTheme } from '../../../core/theme/typography';
+import { initials } from '../../../core/utils/format';
 
 import { Chevron } from './Chevron';
 
@@ -43,16 +44,21 @@ export function CooperativeListItem({
         onPress={onPress}
         style={({ pressed }) => [styles.row, pressed && styles.pressed]}
       >
-        <View style={styles.logo}>
-          {logoUrl ? (
-            <Image
-              source={{ uri: logoUrl }}
-              style={styles.logoImage}
-              contentFit="cover"
-              transition={150}
-            />
-          ) : null}
-        </View>
+        {/*
+          FIXED — this rendered `null` with no logo and had no failure
+          fallback either, so a cooperative without one, or with an expired
+          URL, was an empty coloured circle. A list of them was a column of
+          identical blanks. `RemoteImage` shows the initials underneath and
+          caches the logo to disk, so a scroll back up does not re-download
+          every one.
+        */}
+        <RemoteImage
+          uri={logoUrl}
+          fallback={initials(name)}
+          radius={r(48)}
+          style={styles.logo}
+          transition={150}
+        />
 
         <View style={{ width: r(14) }} />
 

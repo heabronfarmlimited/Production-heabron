@@ -16,7 +16,7 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreenModule from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
@@ -24,13 +24,20 @@ import Toast from 'react-native-toast-message';
 import { setSessionExpiredHandler } from '../core/api/client';
 import { queryClient } from '../core/api/queryClient';
 import { colors } from '../core/theme/colors';
+import { preloadAssets } from '../core/theme/preloadAssets';
 import { subscribeToDimensions } from '../core/theme/responsive';
+import { applyTextScalingPolicy } from '../core/theme/textScaling';
 import { useSessionExpiredHandler } from '../features/auth/hooks/useAuth';
 import { useOfflineFarmerQueue } from '../features/farmers/hooks/useOfflineFarmerQueue';
 
 // Keep the native splash up until fonts are ready, so the first frame isn't
 // unstyled text.
 void SplashScreenModule.preventAutoHideAsync();
+
+// Bound the OS font-size multiplier before anything renders. The user's
+// accessibility setting is still honoured — just capped, so a 3x system font
+// cannot overflow fixed-height rows, buttons and the tab bar.
+applyTextScalingPolicy();
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -43,16 +50,40 @@ export default function RootLayout() {
     'Manrope-ExtraBold': require('../assets/fonts/Manrope-ExtraBold.ttf'),
   });
 
+  /**
+   * The bundled images are warmed alongside the fonts.
+   *
+   * FIXED — the splash used to lift on the fonts alone, so the first screen
+   * painted its layout and then its background artwork snapped in behind the
+   * text a moment later. On a mid-range Android that reads as the app
+   * lagging, and it was: work happening in front of the agent instead of
+   * behind the splash, where a loading indicator is already showing.
+   *
+   * `preloadAssets` never rejects, so a missing image cannot hold the splash.
+   */
+  const [assetsLoaded, setAssetsLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void preloadAssets().finally(() => {
+      if (!cancelled) setAssetsLoaded(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Keeps `w()/h()/r()/spMin()` correct across rotation and split screen,
   // which is what ScreenUtilInit did.
   useEffect(() => subscribeToDimensions(), []);
 
-  useEffect(() => {
-    // A font failure must not leave the app stuck behind the splash.
-    if (fontsLoaded || fontError) void SplashScreenModule.hideAsync();
-  }, [fontsLoaded, fontError]);
+  const ready = (fontsLoaded || fontError) && assetsLoaded;
 
-  if (!fontsLoaded && !fontError) return null;
+  useEffect(() => {
+    // A font or image failure must not leave the app stuck behind the splash.
+    if (ready) void SplashScreenModule.hideAsync();
+  }, [ready]);
+
+  if (!ready) return null;
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

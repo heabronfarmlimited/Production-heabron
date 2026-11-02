@@ -1,7 +1,7 @@
 'use strict';
 
 const { supabaseAdmin } = require('../config/supabase');
-const { ok, paginated, notFound, badRequest, conflict } = require('../utils/response');
+const { ok, paginated, notFound, badRequest, conflict, serverError } = require('../utils/response');
 const { parsePagination } = require('../utils/pagination');
 const { logActivity } = require('../utils/activity');
 const email = require('../services/email');
@@ -89,20 +89,57 @@ async function decideApplication(req, res) {
   // while the agent's profile stayed `pending`, so they were told they had
   // been approved and every request still answered
   // "Account is pending. Awaiting admin approval."
-  const { error: profileErr } = await sb
-    .from('profiles')
-    .update({ status: approved ? 'active' : 'rejected' })
-    .eq('user_id', app.user_id);
-  if (profileErr) {
+  // FIXED AGAIN — checking only `error` was not enough. PostgREST reports no
+  // error when an UPDATE matches NO ROWS, so this silently did nothing when
+  // `app.user_id` had no profiles row, or when row-level security made the row
+  // invisible to the connection (which happens if SUPABASE_SERVICE_ROLE_KEY
+  // actually holds a publishable/anon key — reads still work, writes quietly
+  // affect zero rows). The application was then marked approved and the
+  // "approved" email went out while `profiles.status` stayed `pending`, so the
+  // admin list still showed the agent as pending and the agent was told
+  // "Awaiting admin approval" on every sign-in. Selecting the updated row
+  // turns that silent no-op into a visible failure.
+  const rollbackApplication = async () => {
     await sb
       .from('agent_applications')
-      .update({ status: 'pending', reviewed_by: null, reviewed_at: null })
+      .update({ status: 'pending', rejection_reason: null, reviewed_by: null, reviewed_at: null })
       .eq('id', app.id);
+  };
+
+  const { data: updatedProfile, error: profileErr } = await sb
+    .from('profiles')
+    .update({ status: approved ? 'active' : 'rejected' })
+    .eq('user_id', app.user_id)
+    .select('user_id, status');
+
+  if (profileErr) {
+    await rollbackApplication();
     logger.error(
       { err: profileErr.message, code: profileErr.code, userId: app.user_id },
       'agent profile status update failed — application returned to pending'
     );
     throw profileErr;
+  }
+
+  if (!updatedProfile || updatedProfile.length === 0) {
+    await rollbackApplication();
+    logger.error(
+      {
+        userId: app.user_id,
+        applicationId: app.id,
+        hint:
+          'UPDATE profiles matched no rows. Either there is no profiles row for this ' +
+          'user_id (the on_auth_user_created trigger may not have run), or RLS is ' +
+          'hiding it — check that SUPABASE_SERVICE_ROLE_KEY is the service_role key ' +
+          'and not a publishable/anon key. Run: node scripts/diagnose-approval.js <email>',
+      },
+      'agent profile status update matched no rows — application returned to pending'
+    );
+    return serverError(
+      res,
+      'Could not activate this agent: their profile record was not updated. ' +
+        'The application has been left pending. Please contact support.'
+    );
   }
 
   try {

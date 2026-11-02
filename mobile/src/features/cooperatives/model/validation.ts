@@ -84,16 +84,21 @@ export const cooperativeFormSchema = z
       .min(1, 'Address is required')
       .max(LIMITS.address.max, 'Address must be at most 500 characters'),
 
+    /**
+     * Exactly one primary crop (v2 flow). Required: the cooperative's main
+     * crop is what its members are benchmarked on, and leaving it blank is
+     * how `primary_crop` came to be NULL for every existing cooperative.
+     */
+    primaryCrop: z.string().min(1, 'Please select the primary crop'),
+
     /** `cropsSupported: Joi.array().items(Joi.string()).default([])` — optional. */
     cropsSupported: z.array(z.string()),
 
-    estimatedLandSize: z
-      .string()
-      .trim()
-      .min(1, 'Estimated land size is required')
-      .regex(UNSIGNED_DECIMAL, 'Enter a valid land size in acres')
-      .refine((v) => Number.isFinite(toNumber(v)), 'Enter a valid land size in acres')
-      .refine((v) => toNumber(v) >= 0, 'Land size cannot be negative'),
+    /*
+     * REMOVED (v2 user flow): cooperative land size is no longer collected.
+     * The total is derived from linked farmers' farm records. The server
+     * strips the field if an older build still sends it.
+     */
 
     gpsLat: z
       .string()
@@ -137,6 +142,25 @@ export const cooperativeFormSchema = z
         code: z.ZodIssueCode.custom,
         path: ['gpsLat'],
         message: 'Enter a valid GPS coordinate',
+      });
+    }
+  })
+  /**
+   * Secondaries cannot repeat the primary crop (v2 flow).
+   *
+   * The server enforces this too; checking here means the agent is told
+   * before the round trip. The selector already excludes the primary, so
+   * this only catches a form whose primary was changed after the
+   * secondaries were picked.
+   */
+  .superRefine((form, ctx) => {
+    const primary = form.primaryCrop.trim().toLowerCase();
+    if (!primary) return;
+    if (form.cropsSupported.some((crop) => crop.trim().toLowerCase() === primary)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['cropsSupported'],
+        message: 'The primary crop is already counted — remove it from the other crops',
       });
     }
   });

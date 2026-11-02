@@ -192,7 +192,9 @@ function buildHtml(
       <div class="cell"><div class="label">Leader phone</div><div class="value">${show(cooperative.leaderPhone)}</div></div>
       <div class="cell"><div class="label">Address</div><div class="value">${show(cooperative.address)}</div></div>
       <div class="cell"><div class="label">GPS coordinates</div><div class="value">${gps}</div></div>
-      <div class="cell"><div class="label">Land Size</div><div class="value">${esc(cooperative.estimatedLandSize)} Acres</div></div>
+      <div class="cell"><div class="label">Land Size</div><div class="value">${
+        cooperative.land ? `${esc(cooperative.land.totalLandAcres)} Acres` : DASH
+      }</div></div>
       <div class="cell"><div class="label">Farmers</div><div class="value">${esc(cooperativeFarmerCount(cooperative))}</div></div>
       <div class="cell"><div class="label">Average credit score</div><div class="value">${esc(cooperative.averageCreditScore)}</div></div>
       <div class="cell"><div class="label">Created</div><div class="value">${

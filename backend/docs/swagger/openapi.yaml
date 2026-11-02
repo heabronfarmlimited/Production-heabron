@@ -68,8 +68,11 @@ tags:
   - name: Agent — Repayments
   - name: Agent — Wallet
   - name: Agent — Notifications
+  - name: Agent — Map
+    description: Satellite basemap proxy. The provider API key stays server-side.
   - name: Agent — Uploads
   - name: Agent — Imports
+  - name: Agent — Consent
   - name: Agent — Change Requests
   - name: Agent — Field Notes
   - name: Agent — Market Access
@@ -91,6 +94,7 @@ tags:
   - name: Admin — Profile
   - name: Admin — Uploads
   - name: Admin — Exports
+  - name: Admin — Consent
   - name: Partner — Dashboard
   - name: Partner — Search
   - name: Partner — Credit Reports

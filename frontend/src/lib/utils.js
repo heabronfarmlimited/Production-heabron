@@ -99,3 +99,81 @@ export function relativeTime(iso) {
   if (days < 7) return `${days}d ago`;
   return formatDate(iso);
 }
+
+// ---------------------------------------------------------------- farm sets
+/**
+ * A farmer's farms, in display order.
+ *
+ * A farmer may hold several plots (v2 "Add Another Farm"), so the embedded
+ * `farm_profiles` is a SET, not a single row. Every dashboard page took
+ * `farm_profiles[0]` — an arbitrary row, since PostgREST promises no order on
+ * an embedded select, so two page loads could show different acreage for the
+ * same farmer. The API now sends `farms` already ordered and labelled; this
+ * falls back to ordering `farm_profiles` the same way (primary first, then
+ * oldest) for a response that predates it.
+ */
+export function farmList(farmer) {
+  if (!farmer) return [];
+  if (Array.isArray(farmer.farms) && farmer.farms.length > 0) return farmer.farms;
+  const raw = farmer.farm_profiles;
+  const list = Array.isArray(raw) ? [...raw] : raw ? [raw] : [];
+  return list.filter(Boolean).sort((a, b) => {
+    if (!!a.is_primary !== !!b.is_primary) return a.is_primary ? -1 : 1;
+    return (a.created_at || '') < (b.created_at || '') ? -1 : 1;
+  });
+}
+
+/**
+ * The farm shown wherever one farm is shown: the primary.
+ *
+ * The API's own `farm` object is preferred — it is the server's pick, so the
+ * app, the dashboards and the lender's report all name the same farm.
+ */
+export function primaryFarm(farmer) {
+  if (!farmer) return null;
+  return farmer.farm ?? farmList(farmer)[0] ?? null;
+}
+
+/**
+ * The farmer's land in acres, summed across every farm.
+ *
+ * This is the figure the production score divides by, so a page showing one
+ * plot's acreage was contradicting the score beside it. Returns null — not 0
+ * — when there is no farm at all: "no farm recorded" and "a farm of no size"
+ * are different things and read differently on screen.
+ */
+export function farmerLandAcres(farmer) {
+  if (farmer?.land && Number.isFinite(Number(farmer.land.total_land_acres))) {
+    return Number(farmer.land.total_land_acres);
+  }
+  const farms = farmList(farmer);
+  if (farms.length === 0) return null;
+  const total = farms.reduce((sum, f) => {
+    // The entered size wins over the walked area: an agent can correct the
+    // figure after mapping a boundary that took in a path.
+    const entered = Number(f.acres ?? f.farm_size_acres);
+    if (Number.isFinite(entered) && entered > 0) return sum + entered;
+    const computed = Number(f.computed_area_acres);
+    return Number.isFinite(computed) && computed > 0 ? sum + computed : sum;
+  }, 0);
+  return Math.round((total + Number.EPSILON) * 100) / 100;
+}
+
+/** Every crop across every farm, the primary farm's crop first. */
+export function farmerCrops(farmer) {
+  if (Array.isArray(farmer?.land?.crops) && farmer.land.crops.length > 0) {
+    return farmer.land.crops;
+  }
+  const crops = [];
+  for (const farm of farmList(farmer)) {
+    if (farm.crop_type) crops.push(farm.crop_type);
+    for (const crop of farm.secondary_crops || []) crops.push(crop);
+  }
+  return [...new Set(crops)];
+}
+
+/** `"Cassava plot"`, or `"Farm 2"` by position when unnamed. */
+export function farmLabel(farm, index) {
+  const explicit = (farm?.label || farm?.farm_label || '').trim();
+  return explicit || `Farm ${index + 1}`;
+}

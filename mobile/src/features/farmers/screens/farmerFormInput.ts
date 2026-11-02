@@ -11,6 +11,8 @@ import type { FarmerForm } from '../model/validation';
 export interface BuildFarmerInput {
   form: FarmerForm;
   cooperativeId: string;
+  /** Idempotency key for the form session — see `newClientRequestId`. */
+  clientRequestId?: string;
   farmerPhotoUrl?: string | null;
   idImageUrl?: string | null;
   landDocumentUrl?: string | null;
@@ -20,6 +22,7 @@ export interface BuildFarmerInput {
 export function buildFarmerFormInput({
   form,
   cooperativeId,
+  clientRequestId,
   farmerPhotoUrl,
   idImageUrl,
   landDocumentUrl,
@@ -27,6 +30,7 @@ export function buildFarmerFormInput({
 }: BuildFarmerInput): FarmerFormInput {
   return {
     cooperativeId,
+    clientRequestId,
     fullName: form.fullName,
     dateOfBirth: form.dateOfBirth,
     gender: form.gender,
@@ -44,6 +48,7 @@ export function buildFarmerFormInput({
     idImageUrl,
     farmerPhotoUrl,
     farm: {
+      farmLabel: orUndefined(form.farmLabel),
       farmSizeAcres: numOrUndefined(form.farmSizeAcres),
       cropType: orUndefined(form.cropType),
       // `[]` is meaningful: it clears the list. Only `undefined` is omitted.

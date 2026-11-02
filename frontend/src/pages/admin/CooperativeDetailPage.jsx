@@ -5,6 +5,7 @@ import api from '@/lib/api';
 import { Card, MetricCard, TierPill, Skeleton, StatusPill } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { ExportButton } from '@/components/shared/ExportButton';
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip } from 'recharts';
 import { formatDate, formatNaira, formatNumber, formatScore } from '@/lib/utils';
 import toast from 'react-hot-toast';
@@ -60,9 +61,17 @@ export default function CooperativeDetailPage() {
         title={c.name || 'Cooperative'}
         description={[c.lga, c.state].filter(Boolean).join(', ')}
         actions={
-          <Button onClick={() => recalc.mutate()} loading={recalc.isPending}>
-            <RefreshCw className="size-4" /> Recalculate average
-          </Button>
+          <>
+            <ExportButton
+              url={`/admin/exports/cooperative/${cooperativeId}`}
+              kind="cooperative"
+              label={c.name}
+              title={`Cooperative export — ${c.name || cooperativeId}`}
+            />
+            <Button onClick={() => recalc.mutate()} loading={recalc.isPending}>
+              <RefreshCw className="size-4" /> Recalculate average
+            </Button>
+          </>
         }
       />
 
@@ -115,7 +124,34 @@ export default function CooperativeDetailPage() {
           <KV label="Leader phone" value={c.leader_phone || '—'} icon={Phone} />
           <KV label="Registration #" value={c.registration_number || '—'} />
           <KV label="Crops" value={(c.crops_supported || []).join(', ') || '—'} />
-          <KV label="Estimated land" value={c.estimated_land_size ? `${c.estimated_land_size} acres` : '—'} />
+          {/*
+            v2: the land total is DERIVED from the farms of linked farmers.
+            `estimated_land_size` was an agent-entered figure nothing checked,
+            and the API no longer returns it. The member coverage is shown
+            with it, because a low total usually means farms are missing
+            rather than that the cooperative is small.
+          */}
+          <KV
+            label="Land (from farmer records)"
+            value={
+              c.land
+                ? `${c.land.total_land_acres} acres · ${c.land.farm_count} farm${c.land.farm_count === 1 ? '' : 's'}`
+                : '—'
+            }
+          />
+          <KV
+            label="Members with farms"
+            value={
+              c.land
+                ? `${c.land.members_with_farms}${
+                    c.land.members_without_farms > 0
+                      ? ` · ${c.land.members_without_farms} missing a farm`
+                      : ''
+                  }`
+                : '—'
+            }
+          />
+          <KV label="Primary crop" value={c.primary_crop || '—'} />
           <KV label="Created" value={formatDate(c.created_at)} />
           <KV label="State" value={c.state || '—'} icon={MapPin} />
           <KV label="LGA" value={c.lga || '—'} />

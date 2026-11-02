@@ -15,9 +15,10 @@
  * delay runs concurrently with a profile refresh, so the splash is never
  * longer than it needs to be but never flashes either.
  */
+import { Image, ImageBackground } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef } from 'react';
-import { Image, ImageBackground, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { sessionRoutePath } from '../../../core/navigation/routes';
 import { authStorage } from '../../../core/storage/authStorage';
@@ -84,13 +85,13 @@ export function SplashScreen() {
       <ImageBackground
         source={images.splashBg}
         style={styles.background}
-        resizeMode="cover"
+        contentFit="cover"
       >
         <View style={styles.center}>
           <Image
             source={images.splashImage}
             style={styles.logo}
-            resizeMode="contain"
+            contentFit="contain"
             accessibilityLabel="Heabron CoopScore"
           />
         </View>

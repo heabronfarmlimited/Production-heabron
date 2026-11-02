@@ -9,6 +9,8 @@ const v = require('../validators/domain');
 
 const dashboard = require('../controllers/dashboard.controller');
 const agents = require('../controllers/admin.agents.controller');
+const consent = require('../controllers/consent.controller');
+const creditReport = require('../controllers/creditReport.controller');
 const partners = require('../controllers/admin.partners.controller');
 const cooperatives = require('../controllers/cooperatives.controller');
 const farmers = require('../controllers/farmers.controller');
@@ -140,5 +142,14 @@ router.post('/uploads/:kind', imageUpload.single('file'), asyncHandler(uploads.u
 router.get('/exports/agent', validate(v.listQuery, 'query'), asyncHandler(dashboard.agentExport));
 router.get('/exports/farmer/:farmerId', requireParamUuid('farmerId'), asyncHandler(dashboard.farmerExport));
 router.get('/exports/cooperative/:cooperativeId', requireParamUuid('cooperativeId'), asyncHandler(dashboard.cooperativeExport));
+
+// --- Credit reports ---
+router.get('/farmers/:farmerId/credit-report', requireParamUuid('farmerId'), asyncHandler(creditReport.farmerCreditReport));
+router.get('/cooperatives/:cooperativeId/credit-report', requireParamUuid('cooperativeId'), asyncHandler(creditReport.cooperativeCreditReport));
+
+// --- Data consent ---
+router.get('/consent', validate(v.listQuery, 'query'), asyncHandler(consent.listConsent));
+router.get('/consent/:consentId', requireParamUuid('consentId'), asyncHandler(consent.getConsent));
+router.post('/consent/:consentId/withdraw', requireParamUuid('consentId'), validate(v.withdrawConsent), asyncHandler(consent.withdrawConsent));
 
 module.exports = router;

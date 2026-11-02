@@ -12,9 +12,10 @@
  * duplicate); only one is rendered here.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { Controller, useForm } from 'react-hook-form';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AppButton } from '../../../components/AppButton';
 import { AppSkeleton } from '../../../components/AppSkeleton';
@@ -55,7 +56,7 @@ export function LoginScreen() {
 
   return (
     <AppSkeleton isBusy={isPending} bodyPadding={styles.noPadding} scrollable>
-      <Image source={images.appBarBg} style={styles.headerImage} resizeMode="cover" />
+      <Image source={images.appBarBg} style={styles.headerImage} contentFit="cover" />
 
       <View style={styles.backButton}>
         <AuthBackButton />

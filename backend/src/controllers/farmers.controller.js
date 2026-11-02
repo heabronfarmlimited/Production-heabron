@@ -1,6 +1,8 @@
 'use strict';
 
 const { supabaseAdmin } = require('../config/supabase');
+const consentRules = require('../services/consent/rules');
+const { liveConsentFor } = require('./consent.controller');
 const { ok, created, notFound, forbidden, paginated, badRequest, conflict, serverError } = require('../utils/response');
 const { parsePagination } = require('../utils/pagination');
 const { logActivity } = require('../utils/activity');
@@ -13,38 +15,29 @@ const { chunk } = require('../utils/profiles');
 const { containsPattern } = require('../utils/search');
 const { loanPrincipal } = require('../services/credit-score');
 const { measureFarm } = require('../utils/geo');
+const { summarizeFarms, shapeFarm, shapeFarms, farmAcres } = require('../services/farms');
+const {
+  extractFarmInput,
+  farmRow,
+  farmPatch,
+} = require('../services/farms/mapping');
+const { createOnce, findByClientRequestId } = require('../utils/idempotency');
 const logger = require('../utils/logger');
+
+/**
+ * Ceiling on farms per farmer.
+ *
+ * Not a business rule from the specification — a guard. The set is read
+ * whole on every farmer request, and an unbounded list behind one farmer id
+ * is an easy way for a buggy client retrying "Add Another Farm" to make that
+ * farmer's record unreadable. Twenty is far above any real smallholder's
+ * plot count.
+ */
+const MAX_FARMS_PER_FARMER = 20;
 
 // All farm-profile keys the API accepts at the top level OR nested under `farm`.
 // We tolerate both shapes because the mobile client (Flutter) flattens nested
 // objects in some forms.
-const FARM_FIELDS = [
-  'farmSizeAcres',
-  'cropType',
-  'secondaryCrops',
-  'soilType',
-  'irrigationAccess',
-  'waterSource',
-  'landOwnership',
-  'yearsExperience',
-  'landDocumentUrl',
-  'landDocumentType',
-  'farmPhotoUrls',
-];
-
-function extractFarmInput(body) {
-  if (body && body.farm && typeof body.farm === 'object') return body.farm;
-  const flat = {};
-  let any = false;
-  for (const key of FARM_FIELDS) {
-    if (body && body[key] !== undefined) {
-      flat[key] = body[key];
-      any = true;
-    }
-  }
-  return any ? flat : null;
-}
-
 function farmerRow(input, userId) {
   return {
     cooperative_id: input.cooperativeId,
@@ -65,79 +58,6 @@ function farmerRow(input, userId) {
     farmer_photo_url: input.farmerPhotoUrl,
     created_by_agent_id: userId,
   };
-}
-
-/** camelCase farm input -> farm_profiles column. */
-const FARM_COLUMNS = {
-  farmSizeAcres: 'farm_size_acres',
-  plotCount: 'plot_count',
-  cropType: 'crop_type',
-  secondaryCrops: 'secondary_crops',
-  soilType: 'soil_type',
-  irrigationAccess: 'irrigation_access',
-  waterSource: 'water_source',
-  landOwnership: 'land_ownership',
-  yearsExperience: 'years_experience',
-  gpsLat: 'gps_lat',
-  gpsLng: 'gps_lng',
-  gpsPolygon: 'gps_polygon',
-  landDocumentUrl: 'land_document_url',
-  landDocumentType: 'land_document_type',
-  farmPhotoUrls: 'farm_photo_urls',
-};
-
-/**
- * Derive mapped area + centre from a boundary polygon, so the agent doesn't
- * have to type acreage and the farm shows as GPS-mapped. Only fills fields the
- * caller left blank.
- */
-function applyPolygonDerivations(row, polygon) {
-  if (!polygon) return row;
-  const m = measureFarm(polygon);
-  if (!m) return row;
-  row.gps_mapped = true;
-  row.computed_area_acres = m.acres;
-  if (row.gps_lat == null) row.gps_lat = m.centroid.lat;
-  if (row.gps_lng == null) row.gps_lng = m.centroid.lng;
-  if (row.farm_size_acres == null) row.farm_size_acres = m.acres;
-  return row;
-}
-
-/** Full farm row for an INSERT — creation defaults applied. */
-function farmRow(farmerId, farm) {
-  const row = { farmer_id: farmerId };
-  for (const [key, column] of Object.entries(FARM_COLUMNS)) {
-    row[column] = farm[key] ?? null;
-  }
-  row.plot_count = farm.plotCount || 1;
-  row.irrigation_access = farm.irrigationAccess === undefined ? false : !!farm.irrigationAccess;
-  row.years_experience = farm.yearsExperience || 0;
-  return applyPolygonDerivations(row, farm.gpsPolygon);
-}
-
-/**
- * Farm patch for an UPDATE — ONLY the keys the client actually sent.
- *
- * FIXED — `update` reused the INSERT builder, which supplies a value for every
- * column. Any partial farm patch therefore wrote the creation defaults over
- * the agent's real data:
- *   secondary_crops  -> null   (crop list wiped)
- *   farm_photo_urls  -> null   (every farm photo URL dropped)
- *   gps_polygon      -> null   (the walked boundary erased)
- *   irrigation_access-> false
- *   years_experience -> 0
- *   plot_count       -> 1
- * So "change the soil type" quietly deleted the farm photos and reset the
- * farmer's experience to zero. (The Joi layer was injecting those same
- * defaults into the request body — fixed separately in validators/domain.js.)
- */
-function farmPatch(farm) {
-  const patch = {};
-  for (const [key, column] of Object.entries(FARM_COLUMNS)) {
-    if (farm[key] !== undefined) patch[column] = farm[key];
-  }
-  if (farm.irrigationAccess !== undefined) patch.irrigation_access = !!farm.irrigationAccess;
-  return applyPolygonDerivations(patch, farm.gpsPolygon);
 }
 
 /**
@@ -208,6 +128,48 @@ async function getById(req, res) {
 async function create(req, res) {
   const sb = supabaseAdmin();
 
+  /**
+   * Replay check, BEFORE the consent gate.
+   *
+   * Order matters here and it is easy to get wrong. The first request
+   * back-links its consent record to the farmer it created, so by the time a
+   * retry arrives that consent has an `entity_id` — and the gate below
+   * rejects it with "That consent record is already attached to a farmer".
+   * With the replay check after the gate, every retry got a 409 the agent
+   * could do nothing about, and the idempotency key never came into play at
+   * all. Checking the key first means a retry is answered with the farmer it
+   * already created.
+   */
+  const replay = await findByClientRequestId(
+    sb,
+    'farmers',
+    req.body.clientRequestId,
+    'id, created_by_agent_id'
+  );
+  if (replay.error) throw replay.error;
+  if (replay.row) {
+    // Scoped to the caller: a client request id is client-chosen, so without
+    // this an agent who guessed another agent's key would be handed their
+    // farmer.
+    if (
+      replay.row.created_by_agent_id !== req.user.userId &&
+      !ADMIN_ROLES.includes(req.user.role)
+    ) {
+      return forbidden(res);
+    }
+    logger.info(
+      { farmerId: replay.row.id, clientRequestId: req.body.clientRequestId },
+      'farmer create replayed — returning the existing record'
+    );
+    const { data: hydratedReplay } = await sb
+      .from('farmers')
+      .select(`*, cooperatives(id, name), farm_profiles(*), credit_scores(final_credit_score, credit_tier)`)
+      .eq('id', replay.row.id)
+      .maybeSingle();
+    // 200, not 201: this request created nothing.
+    return ok(res, shapeFarmer(hydratedReplay));
+  }
+
   // FIXED — nothing verified the cooperative. An agent could attach a new
   // farmer to ANY cooperative id, including another agent's, which then
   // counted that farmer toward the other agent's member total and their
@@ -217,19 +179,131 @@ async function create(req, res) {
   if (coopAccess.error === 'forbidden') return forbidden(res, 'That cooperative was not created by you');
   if (coopAccess.error) return serverError(res, 'Could not verify the cooperative');
 
-  const row = farmerRow(req.body, req.user.userId);
+  /**
+   * Consent gate, Flow B (data consent specification, section 4).
+   *
+   * "A farmer profile cannot be submitted until Flow B is complete. The
+   * cooperative must already have a completed Flow A."
+   *
+   * Enforced on the server, not just in the app: a farmer record created
+   * without consent is one that cannot lawfully be scored or shared, and the
+   * mobile client is not the place that decision can be trusted.
+   *
+   * `consentId` comes from POST /agent/consent, which the app calls before
+   * submitting the profile.
+   */
+  const coopConsent = await liveConsentFor(sb, 'cooperative', req.body.cooperativeId);
+  if (!consentRules.satisfiesGate(coopConsent)) {
+    return conflict(
+      res,
+      'This cooperative has no consent on record. Complete the cooperative consent before adding farmers.',
+      { cooperativeId: req.body.cooperativeId, gate: 'cooperative_consent' }
+    );
+  }
 
-  const { data: farmer, error } = await sb.from('farmers').insert(row).select().single();
-  if (error) {
-    logger.error({ err: error.message, code: error.code, hint: error.hint, details: error.details }, 'farmer insert failed');
-    throw error;
+  if (!req.body.consentId) {
+    return conflict(
+      res,
+      'Farmer consent is required before the profile can be submitted.',
+      { gate: 'farmer_consent' }
+    );
+  }
+
+  const { data: farmerConsent, error: fcErr } = await sb
+    .from('consent_records')
+    .select('id, entity_type, entity_id, status, third_party_sharing')
+    .eq('id', req.body.consentId)
+    .maybeSingle();
+  if (fcErr) throw fcErr;
+
+  if (!farmerConsent || farmerConsent.entity_type !== 'farmer') {
+    return badRequest(res, 'That consent record was not found, or is not a farmer consent.');
+  }
+  if (!consentRules.satisfiesGate(farmerConsent)) {
+    return conflict(res, `That consent record is ${farmerConsent.status}.`, { gate: 'farmer_consent' });
+  }
+  if (farmerConsent.entity_id) {
+    // Already attached to a farmer: re-using it would record one person's
+    // consent against another's profile.
+    return conflict(res, 'That consent record is already attached to a farmer.', {
+      gate: 'farmer_consent',
+    });
+  }
+
+  const row = farmerRow(req.body, req.user.userId);
+  row.consent_record_id = farmerConsent.id;
+  row.consent_status = farmerConsent.status;
+  row.third_party_sharing = farmerConsent.third_party_sharing;
+  row.client_request_id = req.body.clientRequestId || null;
+
+  /**
+   * Duplicate-safe creation (v2 flow: "duplicate-safe client UUID").
+   *
+   * Onboarding runs on a field connection. The agent taps again when nothing
+   * seems to be happening, and the offline queue retries a request whose
+   * response was lost after the server had already committed. Both produced
+   * two farmer records for one person — two credit scores, a wrong member
+   * count, and a lender reading whichever one they found.
+   *
+   * With a key, a repeat returns the farmer that already exists. Everything
+   * after this point is skipped on a replay: the NIN check, the member-count
+   * refresh, the score recalculation, the notification and the activity log
+   * all ran the first time, and running them again is how one farmer ends up
+   * with three "onboarded" entries in the audit trail.
+   */
+  const creation = await createOnce(sb, 'farmers', row.client_request_id, () =>
+    sb.from('farmers').insert(row).select().single()
+  );
+  if (creation.error) throw creation.error;
+
+  const farmer = creation.row;
+
+  if (creation.replayed) {
+    // Only reachable when a concurrent retry committed between the replay
+    // check above and this insert — the unique index caught it.
+    logger.info(
+      { farmerId: farmer.id, clientRequestId: row.client_request_id },
+      'farmer create lost the race to a concurrent retry — returning that record'
+    );
+    const { data: hydratedReplay } = await sb
+      .from('farmers')
+      .select(`*, cooperatives(id, name), farm_profiles(*), credit_scores(final_credit_score, credit_tier)`)
+      .eq('id', farmer.id)
+      .maybeSingle();
+    // 200, not 201: nothing was created by this request.
+    return ok(res, shapeFarmer(hydratedReplay || farmer));
+  }
+
+  // Close the consent link in the other direction. The consent record is
+  // created before the farmer exists, so entity_id is only knowable now; until
+  // it is set, the record cannot be found by entity and would be offered again
+  // as unattached.
+  //
+  // `createOnce` throws on a real insert failure above, so reaching here means
+  // the farmer exists — the old `if (!error && farmer)` guard and the
+  // `if (error) throw` that followed it are gone with it.
+  {
+    const { error: linkErr } = await sb
+      .from('consent_records')
+      .update({ entity_id: farmer.id })
+      .eq('id', row.consent_record_id)
+      .is('entity_id', null);
+    if (linkErr) {
+      logger.error(
+        { err: linkErr.message, consentId: row.consent_record_id, farmerId: farmer.id },
+        'consent back-link failed — the farmer exists but their consent is not attached'
+      );
+    }
   }
 
   // Insert farm profile (accept either nested `farm` object or flat fields).
   const farmInput = extractFarmInput(req.body);
   let farmProfileError = null;
   if (farmInput) {
-    const { error: fpErr } = await sb.from('farm_profiles').insert(farmRow(farmer.id, farmInput));
+    // The farm created alongside the farmer is their primary one.
+    const { error: fpErr } = await sb
+      .from('farm_profiles')
+      .insert(farmRow(farmer.id, farmInput, { isPrimary: true }));
     if (fpErr) {
       // Deliberately non-fatal: the farmer row is already committed and
       // losing it would be worse. But the failure is no longer invisible —
@@ -350,12 +424,23 @@ async function update(req, res) {
     // FIXED — this used `farmRow()`, the INSERT builder, which supplies every
     // column. See `farmPatch` above: a partial farm edit was wiping the crop
     // list, the farm photos and the GPS boundary.
-    const { data: fp, error: fpReadErr } = await sb
+    // FIXED — this was `.maybeSingle()`, which PostgREST fails outright
+    // (PGRST116) when more than one row matches. As soon as a farmer had a
+    // second farm, every edit to that farmer returned a 500 — including edits
+    // that touched no farm field at all, since `farmInput` is non-null
+    // whenever any farm key is present in the body. The nested `farm` object
+    // is documented as editing the farmer's PRIMARY farm, so that is what is
+    // selected; a specific farm is edited through
+    // PATCH /farmers/:farmerId/farms/:farmId.
+    const { data: fpRows, error: fpReadErr } = await sb
       .from('farm_profiles')
-      .select('id')
+      .select('id, is_primary, created_at')
       .eq('farmer_id', existing.id)
-      .maybeSingle();
+      .order('is_primary', { ascending: false })
+      .order('created_at', { ascending: true })
+      .limit(1);
     if (fpReadErr) throw fpReadErr;
+    const fp = fpRows?.[0] || null;
 
     if (fp) {
       const farm = farmPatch(farmInput);
@@ -365,8 +450,11 @@ async function update(req, res) {
         if (e2) throw e2;
       }
     } else {
-      // No profile yet — this is effectively a create, so defaults apply.
-      const { error: e2 } = await sb.from('farm_profiles').insert(farmRow(existing.id, farmInput));
+      // No profile yet — this is effectively a create, so defaults apply and
+      // the farmer's only farm becomes their primary.
+      const { error: e2 } = await sb
+        .from('farm_profiles')
+        .insert(farmRow(existing.id, farmInput, { isPrimary: true }));
       if (e2) throw e2;
     }
   }
@@ -638,13 +726,13 @@ async function getFinancingHistory(req, res) {
 async function mapFarm(req, res) {
   const sb = supabaseAdmin();
   const { farmerId } = req.params;
-  const { gpsPolygon, overrideSizeAcres } = req.body;
+  const { gpsPolygon, overrideSizeAcres, farmId } = req.body;
 
   const access = await assertFarmerAccess(
     sb,
     farmerId,
     req.user,
-    'id, created_by_agent_id, cooperative_id, farm_profiles(id)'
+    'id, created_by_agent_id, cooperative_id, farm_profiles(id, is_primary, created_at)'
   );
   if (access.error === 'not_found') return notFound(res, 'Farmer not found');
   if (access.error === 'forbidden') return forbidden(res);
@@ -672,7 +760,22 @@ async function mapFarm(req, res) {
     updated_at: new Date().toISOString(),
   };
 
-  const existingProfile = farmer.farm_profiles?.[0] || farmer.farm_profiles;
+  // Which farm is being mapped. A farmer can hold several, so `farmId` names
+  // one; without it the primary farm is mapped, which is what the single-farm
+  // map screen means. Taking `[0]` off the embedded array (the old code)
+  // mapped an arbitrary plot — the agent could walk farm 2's boundary and
+  // have it saved onto farm 1.
+  const ownFarms = summarizeFarms(farmer.farm_profiles).farms;
+  let existingProfile = null;
+  if (farmId) {
+    existingProfile = ownFarms.find((f) => f.id === farmId) || null;
+    if (!existingProfile) {
+      return notFound(res, 'That farm does not belong to this farmer');
+    }
+  } else {
+    existingProfile = ownFarms[0] || null;
+  }
+
   // FIXED — both writes discarded their error, so a failed save still returned
   // the computed acreage to the app as though it had been stored: the agent
   // walked the boundary, saw the area, and nothing was persisted.
@@ -680,7 +783,9 @@ async function mapFarm(req, res) {
     const { error: upErr } = await sb.from('farm_profiles').update(patch).eq('id', existingProfile.id);
     if (upErr) throw upErr;
   } else {
-    const { error: insErr } = await sb.from('farm_profiles').insert({ farmer_id: farmerId, ...patch });
+    const { error: insErr } = await sb
+      .from('farm_profiles')
+      .insert({ farmer_id: farmerId, is_primary: true, ...patch });
     if (insErr) throw insErr;
   }
 
@@ -689,9 +794,10 @@ async function mapFarm(req, res) {
   // the score on Vercel.
   await safeRecalculateFarmer(farmerId, { triggerReason: 'farm_mapped' });
 
-  await logActivity({ actor: req.user, action: 'farm_mapped', entityType: 'farm_profile', entityId: farmerId, metadata: { acres: m.acres }, req });
+  await logActivity({ actor: req.user, action: 'farm_mapped', entityType: 'farm_profile', entityId: existingProfile?.id || farmerId, metadata: { acres: m.acres, farmerId }, req });
   return ok(res, {
     farmerId,
+    farmId: existingProfile?.id ?? null,
     computedAreaAcres: m.acres,
     computedAreaHectares: m.hectares,
     areaSqMeters: m.areaSqM,
@@ -699,6 +805,252 @@ async function mapFarm(req, res) {
     farmSizeAcres: sizeAcres,
     gpsMapped: true,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Farms within a farmer ("Add Another Farm")
+//
+// A farmer may hold several plots. These five handlers manage the set; the
+// nested `farm` object on POST/PATCH /farmers still creates and edits the
+// farmer's PRIMARY farm, so nothing about the existing single-farm flow
+// changes.
+// ---------------------------------------------------------------------------
+
+/** Load a farmer's farms after checking the caller may see that farmer. */
+async function loadOwnFarms(req, res) {
+  const sb = supabaseAdmin();
+  const { farmerId } = req.params;
+  const access = await assertFarmerAccess(
+    sb,
+    farmerId,
+    req.user,
+    'id, created_by_agent_id, cooperative_id, farm_profiles(*)'
+  );
+  if (access.error === 'not_found') {
+    notFound(res, 'Farmer not found');
+    return null;
+  }
+  if (access.error === 'forbidden') {
+    forbidden(res);
+    return null;
+  }
+  if (access.error) {
+    serverError(res, 'Could not verify access to that farmer');
+    return null;
+  }
+  return { sb, farmerId, farms: summarizeFarms(access.farmer.farm_profiles).farms };
+}
+
+async function listFarms(req, res) {
+  const loaded = await loadOwnFarms(req, res);
+  if (!loaded) return undefined;
+  const summary = summarizeFarms(loaded.farms);
+  return ok(res, {
+    farmer_id: loaded.farmerId,
+    farms: shapeFarms(loaded.farms),
+    land: {
+      farm_count: summary.farmCount,
+      total_land_acres: summary.totalAcres,
+      mapped_land_acres: summary.mappedAcres,
+      mapped_farm_count: summary.mappedCount,
+      fully_mapped: summary.fullyMapped,
+      crops: summary.crops,
+      primary_crop: summary.primaryCrop,
+    },
+  });
+}
+
+async function addFarm(req, res) {
+  const loaded = await loadOwnFarms(req, res);
+  if (!loaded) return undefined;
+  const { sb, farmerId, farms } = loaded;
+
+  if (farms.length >= MAX_FARMS_PER_FARMER) {
+    return badRequest(
+      res,
+      `A farmer can hold at most ${MAX_FARMS_PER_FARMER} farms. Remove one before adding another.`,
+      { farmCount: farms.length }
+    );
+  }
+
+  // The first farm a farmer gets is their primary one, whichever endpoint
+  // created it. After that, new farms are secondary until promoted.
+  const isPrimary = farms.length === 0;
+
+  const { data: inserted, error } = await sb
+    .from('farm_profiles')
+    .insert(farmRow(farmerId, req.body, { isPrimary }))
+    .select('*')
+    .single();
+  if (error) throw error;
+
+  // Land size is the denominator of the production score, so adding a farm
+  // changes the score. Awaited, not fire-and-forget: Vercel freezes the
+  // lambda when the response is sent.
+  await safeRecalculateFarmer(farmerId, { triggerReason: 'farm_added' });
+  await logActivity({
+    actor: req.user,
+    action: 'farm_added',
+    entityType: 'farm_profile',
+    entityId: inserted.id,
+    metadata: { farmerId, acres: farmAcres(inserted) },
+    req,
+  });
+
+  return created(res, shapeFarm(inserted, farms.length));
+}
+
+async function updateFarm(req, res) {
+  const loaded = await loadOwnFarms(req, res);
+  if (!loaded) return undefined;
+  const { sb, farmerId, farms } = loaded;
+
+  const index = farms.findIndex((f) => f.id === req.params.farmId);
+  if (index === -1) return notFound(res, 'That farm does not belong to this farmer');
+
+  // Partial update only. `farmPatch` writes just the keys that were sent, so
+  // an edit that omits the crop list or the boundary leaves them as they are
+  // rather than clearing them.
+  const patch = farmPatch(req.body);
+  if (Object.keys(patch).length === 0) return badRequest(res, 'No fields to update');
+  patch.updated_at = new Date().toISOString();
+
+  const { data: updated, error } = await sb
+    .from('farm_profiles')
+    .update(patch)
+    .eq('id', req.params.farmId)
+    // Scoped to the farmer as well as the row, so a farm id from another
+    // farmer cannot be edited even if the ownership check were bypassed.
+    .eq('farmer_id', farmerId)
+    .select('*');
+  if (error) throw error;
+  if (!updated || updated.length === 0) {
+    // An UPDATE that matches nothing reports no error through PostgREST, so
+    // without this the agent would be told the edit saved when it did not.
+    return serverError(res, 'The farm was not updated. Please try again.');
+  }
+
+  await safeRecalculateFarmer(farmerId, { triggerReason: 'farm_updated' });
+  await logActivity({
+    actor: req.user,
+    action: 'farm_updated',
+    entityType: 'farm_profile',
+    entityId: req.params.farmId,
+    metadata: { farmerId, fields: Object.keys(patch) },
+    req,
+  });
+
+  return ok(res, shapeFarm(updated[0], index));
+}
+
+async function setPrimaryFarm(req, res) {
+  const loaded = await loadOwnFarms(req, res);
+  if (!loaded) return undefined;
+  const { sb, farmerId, farms } = loaded;
+
+  const target = farms.find((f) => f.id === req.params.farmId);
+  if (!target) return notFound(res, 'That farm does not belong to this farmer');
+  if (target.is_primary) return ok(res, shapeFarm(target, 0));
+
+  // The unique index allows one primary per farmer, so the old one is cleared
+  // first. These are two statements: if the second fails the farmer is left
+  // with no primary, which the read path tolerates (it falls back to the
+  // oldest farm) — unlike the reverse order, which would fail outright.
+  const { error: clearErr } = await sb
+    .from('farm_profiles')
+    .update({ is_primary: false, updated_at: new Date().toISOString() })
+    .eq('farmer_id', farmerId)
+    .eq('is_primary', true);
+  if (clearErr) throw clearErr;
+
+  const { data: promoted, error: setErr } = await sb
+    .from('farm_profiles')
+    .update({ is_primary: true, updated_at: new Date().toISOString() })
+    .eq('id', req.params.farmId)
+    .eq('farmer_id', farmerId)
+    .select('*');
+  if (setErr) throw setErr;
+  if (!promoted || promoted.length === 0) {
+    return serverError(res, 'The main farm was not changed. Please try again.');
+  }
+
+  // The primary farm's crop is the farmer's main crop, which the score reads.
+  await safeRecalculateFarmer(farmerId, { triggerReason: 'primary_farm_changed' });
+  await logActivity({
+    actor: req.user,
+    action: 'farm_primary_changed',
+    entityType: 'farm_profile',
+    entityId: req.params.farmId,
+    metadata: { farmerId },
+    req,
+  });
+
+  return ok(res, shapeFarm(promoted[0], 0));
+}
+
+async function removeFarm(req, res) {
+  const loaded = await loadOwnFarms(req, res);
+  if (!loaded) return undefined;
+  const { sb, farmerId, farms } = loaded;
+
+  const target = farms.find((f) => f.id === req.params.farmId);
+  if (!target) return notFound(res, 'That farm does not belong to this farmer');
+
+  // A farmer with no farm cannot be credit-scored at all (land size is the
+  // denominator of the production score), so the last farm is not deletable.
+  // Removing the farmer is the operation that means "this record is wrong".
+  if (farms.length <= 1) {
+    return conflict(
+      res,
+      'This is the farmer\'s only farm and cannot be removed — a farmer without a farm cannot be credit-scored. Edit it instead, or remove the farmer.'
+    );
+  }
+
+  // Production and delivery records are recorded against the FARMER, not the
+  // farm, so deleting a farm does not orphan them — but it does change the
+  // land the existing yields are measured against, which is why the score is
+  // recalculated below.
+  const { data: deleted, error } = await sb
+    .from('farm_profiles')
+    .delete()
+    .eq('id', req.params.farmId)
+    .eq('farmer_id', farmerId)
+    .select('id, is_primary');
+  if (error) throw error;
+  if (!deleted || deleted.length === 0) {
+    return serverError(res, 'The farm was not removed. Please try again.');
+  }
+
+  // If the primary farm went, promote the oldest survivor so the farmer is
+  // never left without one.
+  if (deleted[0].is_primary) {
+    const next = farms.find((f) => f.id !== req.params.farmId);
+    if (next) {
+      const { error: promoteErr } = await sb
+        .from('farm_profiles')
+        .update({ is_primary: true, updated_at: new Date().toISOString() })
+        .eq('id', next.id)
+        .eq('farmer_id', farmerId);
+      if (promoteErr) {
+        logger.error(
+          { err: promoteErr.message, farmerId, farmId: next.id },
+          'primary farm promotion after delete failed — farmer has no primary farm'
+        );
+      }
+    }
+  }
+
+  await safeRecalculateFarmer(farmerId, { triggerReason: 'farm_removed' });
+  await logActivity({
+    actor: req.user,
+    action: 'farm_removed',
+    entityType: 'farm_profile',
+    entityId: req.params.farmId,
+    metadata: { farmerId },
+    req,
+  });
+
+  return ok(res, { id: req.params.farmId, deleted: true });
 }
 
 module.exports = {
@@ -711,4 +1063,9 @@ module.exports = {
   mapFarm,
   getCreditScore,
   getFinancingHistory,
+  listFarms,
+  addFarm,
+  updateFarm,
+  setPrimaryFarm,
+  removeFarm,
 };

@@ -4,6 +4,7 @@ import { Search, Pause, Play, UserCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { ExportButton } from '@/components/shared/ExportButton';
 import { EmptyState, StatusPill, Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input, Field, Textarea } from '@/components/ui/Input';
@@ -85,6 +86,16 @@ export default function AgentsPage() {
         eyebrow="People"
         title="Field Agents"
         description="Manage all agents who collect cooperative + farmer data on the ground."
+        actions={
+          /* The agent export endpoint existed with nothing calling it, so
+             there was no way to get an agent's cooperatives, farmers and
+             repayments out of the platform. Without `agentId` it exports the
+             signed-in admin's own view, which is what this header-level
+             button means. */
+          <ExportButton url="/admin/exports/agent" kind="agent" label="all-agents">
+            Export activity
+          </ExportButton>
+        }
       />
 
       <Card padded={false} className="mb-4">

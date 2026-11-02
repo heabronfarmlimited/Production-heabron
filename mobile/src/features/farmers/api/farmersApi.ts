@@ -32,14 +32,20 @@ import {
   parseBulkImportResult,
   parseFarmer,
   parseFarmerCreditScoreDetail,
+  parseFarmProfile,
+  parseFarmerFarmSet,
   parseMapFarmResult,
   parseNinVerificationResult,
+  toFarmProfileBody,
   toFarmerBody,
   toUpdateFarmerBody,
   type BulkImportResult,
   type Farmer,
   type FarmerCreditScoreDetail,
   type FarmerFormInput,
+  type FarmerFarmProfile,
+  type FarmerFarmSet,
+  type FarmProfileBody,
   type GpsPoint,
   type MapFarmResult,
   type NinVerificationResult,
@@ -184,6 +190,12 @@ export async function mapFarm(
   farmerId: string,
   gpsPolygon: GpsPoint[],
   overrideSizeAcres?: number,
+  /**
+   * Which of the farmer's farms the boundary belongs to. Omitted maps the
+   * primary farm. A farmer with several plots needs this, or farm 2's
+   * boundary is saved onto farm 1.
+   */
+  farmId?: string,
 ): Promise<MapFarmResult> {
   if (gpsPolygon.length < LIMITS.minPolygonPoints) {
     throw new Error(
@@ -195,8 +207,71 @@ export async function mapFarm(
     await api.post<unknown>(endpoints.mapFarm(farmerId), {
       gpsPolygon,
       ...(overrideSizeAcres != null ? { overrideSizeAcres } : {}),
+      ...(farmId ? { farmId } : {}),
     }),
   );
+}
+
+// ------------------------------------------------------------------- farms
+//
+// A farmer may hold several farms. The nested `farm` object on create/update
+// addresses the PRIMARY farm; these five address the set.
+
+/** `GET /agent/farmers/:farmerId/farms` */
+export async function fetchFarmerFarms(farmerId: string): Promise<FarmerFarmSet> {
+  return parseFarmerFarmSet(await api.get<unknown>(endpoints.farmerFarms(farmerId)));
+}
+
+/** `POST /agent/farmers/:farmerId/farms` — "Add Another Farm". */
+export async function addFarmerFarm(
+  farmerId: string,
+  farm: FarmProfileBody,
+): Promise<FarmerFarmProfile> {
+  return parseFarmProfile(
+    await api.post<unknown>(endpoints.farmerFarms(farmerId), toFarmProfileBody(farm)),
+  );
+}
+
+/**
+ * `PATCH /agent/farmers/:farmerId/farms/:farmId`
+ *
+ * A partial update: only the keys sent are written, so an edit of the soil
+ * type does not clear the crop list or the walked boundary.
+ */
+export async function updateFarmerFarm(
+  farmerId: string,
+  farmId: string,
+  farm: FarmProfileBody,
+): Promise<FarmerFarmProfile> {
+  return parseFarmProfile(
+    await api.patch<unknown>(
+      endpoints.farmerFarmById(farmerId, farmId),
+      toFarmProfileBody(farm),
+    ),
+  );
+}
+
+/** `POST /agent/farmers/:farmerId/farms/:farmId/primary` — make it the main farm. */
+export async function setPrimaryFarmerFarm(
+  farmerId: string,
+  farmId: string,
+): Promise<FarmerFarmProfile> {
+  return parseFarmProfile(
+    await api.post<unknown>(endpoints.farmerFarmPrimary(farmerId, farmId)),
+  );
+}
+
+/**
+ * `DELETE /agent/farmers/:farmerId/farms/:farmId`
+ *
+ * The server refuses to remove a farmer's only farm (409): a farmer without
+ * a farm cannot be credit-scored.
+ */
+export async function deleteFarmerFarm(
+  farmerId: string,
+  farmId: string,
+): Promise<void> {
+  await api.delete<unknown>(endpoints.farmerFarmById(farmerId, farmId));
 }
 
 /** `GET /agent/farmers/:farmerId/credit-score` → `{ current, history }`. */

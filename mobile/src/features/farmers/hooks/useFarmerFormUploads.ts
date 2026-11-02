@@ -35,6 +35,20 @@ export function useFarmerFormUploads(initial: FarmerFormUploadsInitial = {}) {
       idCard.uploading ||
       landDocument.uploading ||
       farmPhotos.uploading,
+    /**
+     * True once anything has reached storage.
+     *
+     * Used when a registration fails AFTER its uploads succeeded (an
+     * exception flow in the user flow, section 7): the agent is told their
+     * files are already uploaded and a retry will not re-send them, which is
+     * otherwise invisible and makes abandoning the form look like the safer
+     * choice on a field connection.
+     */
+    hasUploads:
+      Boolean(farmerPhoto.url) ||
+      Boolean(idCard.url) ||
+      Boolean(landDocument.url) ||
+      farmPhotos.urls.length > 0,
   };
 }
 

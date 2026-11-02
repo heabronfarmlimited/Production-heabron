@@ -9,7 +9,9 @@
     "preview": "vite preview --port 5173",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "lint:fix": "eslint . --ext js,jsx --fix",
-    "verify": "npm run lint && npm run build"
+    "verify": "npm run lint && npm run test && npm run check:contract && npm run build",
+    "check:contract": "node scripts/check-backend-contract.mjs",
+    "test": "node --test scripts/verify-export-csv.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",

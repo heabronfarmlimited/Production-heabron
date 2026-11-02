@@ -26,6 +26,7 @@ import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 import { AppLoading } from '../../../components/AppLoading';
 import { AppSkeleton } from '../../../components/AppSkeleton';
 import { AppTextField } from '../../../components/AppTextField';
+import { SkeletonList } from '../../../components/Skeleton';
 import { routes } from '../../../core/navigation/routes';
 import { colors } from '../../../core/theme/colors';
 import { h, r, spMin } from '../../../core/theme/responsive';
@@ -55,7 +56,7 @@ export function CooperativesScreen() {
   return (
     <AppSkeleton
       // Only the first load blocks; a refresh must not cover the list.
-      isBusy={isLoading && items.length === 0}
+      firstLoad={isLoading && items.length === 0 ? <SkeletonList /> : null}
       backgroundColor={colors.background}
     >
       <View style={styles.header}>

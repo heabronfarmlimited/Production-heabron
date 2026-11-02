@@ -241,6 +241,7 @@ function toFarmerForm(farmer: Farmer): FarmerForm {
     state: farmer.state ?? '',
     lga: farmer.lga ?? '',
 
+    farmLabel: farm?.farmLabel ?? '',
     farmSizeAcres: farm?.farmSizeAcres?.toString() ?? '',
     cropType: (farm?.cropType ?? '').toLowerCase(),
     // FIXED — never prefilled in Dart, then overwritten with [].

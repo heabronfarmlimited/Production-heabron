@@ -19,11 +19,11 @@
  * so the route could not be deep-linked or restored. This screen takes the id
  * and fetches `GET /agent/wallet/transactions/:id`.
  */
+import { Image } from 'expo-image';
 import { useLocalSearchParams } from 'expo-router';
 import type { ReactNode} from 'react';
 import { useState } from 'react';
 import {
-  Image,
   Modal,
   Pressable,
   ScrollView,
@@ -35,6 +35,7 @@ import {
 import { AppLoading } from '../../../components/AppLoading';
 import { AppSkeleton } from '../../../components/AppSkeleton';
 import { AuthBackButton } from '../../../components/BaseAppBar';
+import { SkeletonCard } from '../../../components/Skeleton';
 import { colors } from '../../../core/theme/colors';
 import { h, r, spMin, w } from '../../../core/theme/responsive';
 import { fontWeights, textTheme, withNaira } from '../../../core/theme/typography';
@@ -76,7 +77,7 @@ export function WalletTransactionDetailsScreen({
 
   return (
     <AppSkeleton
-      isBusy={isLoading && transaction == null}
+      firstLoad={isLoading && transaction == null ? <SkeletonCard rows={5} /> : null}
       appBarLeading={<AuthBackButton />}
       appBarTitleWidget={<Text style={styles.appBarTitle}>Transaction Details</Text>}
       bodyPadding={styles.bodyPadding}
@@ -285,7 +286,7 @@ function ImageGallery({ urls }: { urls: string[] }) {
             <Image
               source={{ uri: viewing }}
               style={styles.viewerImage}
-              resizeMode="contain"
+              contentFit="contain"
             />
           ) : null}
           <Pressable
@@ -319,7 +320,7 @@ function GalleryThumb({ url }: { url: string }) {
       <Image
         source={{ uri: url }}
         style={styles.thumb}
-        resizeMode="cover"
+        contentFit="cover"
         onLoad={() => setState('ready')}
         onError={() => setState('error')}
       />

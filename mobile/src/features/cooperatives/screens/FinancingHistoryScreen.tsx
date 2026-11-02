@@ -29,6 +29,7 @@ import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native'
 
 import { AppLoading } from '../../../components/AppLoading';
 import { AppSkeleton } from '../../../components/AppSkeleton';
+import { SkeletonList } from '../../../components/Skeleton';
 import { FINANCING_STATUS_TABS } from '../../../core/api/domainConstants';
 import { routes } from '../../../core/navigation/routes';
 import { colors } from '../../../core/theme/colors';
@@ -64,7 +65,7 @@ export function FinancingHistoryScreen({
 
   return (
     <AppSkeleton
-      isBusy={isLoading && items.length === 0}
+      firstLoad={isLoading && items.length === 0 ? <SkeletonList /> : null}
       appBarTitle="Financing History"
       bodyPadding={styles.noPadding}
     >

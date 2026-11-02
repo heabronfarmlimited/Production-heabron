@@ -142,6 +142,23 @@ export function resolveCoopScoreColor(value: number): string {
 
 // ----------------------------------------------------------------- misc
 /** `isObjectEmpty` */
+/**
+ * Up to two initials from a name, for an image placeholder.
+ *
+ * A cooperative with no logo — or one whose logo URL has expired — used to
+ * render as an empty coloured circle, so a list of them was a column of
+ * identical blanks. Initials make the row identifiable without an image.
+ */
+export function initials(name?: string | null): string {
+  const parts = (name ?? '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2);
+  if (parts.length === 0) return '';
+  return parts.map((part) => (part[0] ?? '').toUpperCase()).join('');
+}
+
 export function isEmpty(value: unknown): boolean {
   if (value == null) return true;
   if (Array.isArray(value)) return value.length === 0;
